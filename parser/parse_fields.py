@@ -68,6 +68,19 @@ def _num_clean(s: str | None) -> str | None:
     return s2 if s2 else None
 
 
+def _kw_clean(s: str | None) -> str | None:
+    """
+    Normalize kW-like strings.
+
+    Examples:
+      '26' -> '26'
+      '10.5' -> '10.5'
+      '1,250' -> '1250'
+      '1,250.50' -> '1250.50'
+    """
+    return _num_clean(s)
+
+
 def _parse_es_date(s: str | None) -> str | None:
     """
     Parse '07 NOV 25' -> '2025-11-07' (ISO).
@@ -116,6 +129,7 @@ def detect_document_type(text: str) -> tuple[str, str]:
         return ("CFE", "cfe_bill")
 
     return ("UNKNOWN", "unknown")
+
 
 def parse_bill_fields(text: str) -> dict:
     out: dict[str, object] = {}
@@ -183,7 +197,7 @@ def parse_bill_fields(text: str) -> dict:
         out["periodo_fin"] = None
 
     # -------------------------
-    # Tariff / meter
+    # Tariff / contract / meter
     # -------------------------
     tarifa: str | None = None
 
@@ -202,8 +216,38 @@ def parse_bill_fields(text: str) -> dict:
 
     out["tarifa"] = tarifa
 
+    # Contract / technical service fields.
+    # Typical CFE pattern, as seen in the marked bill example:
+    #   CARGA CONECTADA kW:26
+    #   DEMANDA CONTRATADA kW:26
+    #
+    # OCR/spacing variants allowed:
+    #   CARGA CONECTADA KW : 26
+    #   CARGA CONECTADA: 26 kW
+    #   DEMANDA CONTRATADA KW:26
+    out["carga_conectada_kw"] = _kw_clean(
+        _find_first(
+            r"\bCARGA\s+CONECTADA\s*(?:kW|KW)?\s*:?\s*([0-9][0-9\.,]*)\s*(?:kW|KW)?",
+            text,
+            re.IGNORECASE,
+        )
+    )
+
+    out["demanda_contratada_kw"] = _kw_clean(
+        _find_first(
+            r"\bDEMANDA\s+CONTRATADA\s*(?:kW|KW)?\s*:?\s*([0-9][0-9\.,]*)\s*(?:kW|KW)?",
+            text,
+            re.IGNORECASE,
+        )
+    )
+
     # Meter-related fields
-    out["medidor"] = _alnum_only(_find_first(r"\bMEDIDOR\s*:\s*([A-Z0-9\- ]+)\b", text, re.IGNORECASE))
+    raw_medidor = _find_first(
+        r"\bMEDIDOR\s*:\s*([A-Z0-9\- ]+?)(?=\s*(?:MULTIPLICADOR|NO\s+HILOS|TARIFA|CARGA\s+CONECTADA|DEMANDA\s+CONTRATADA|$))",
+        text,
+        re.IGNORECASE,
+    )
+    out["medidor"] = _alnum_only(raw_medidor)
     out["multiplicador"] = _num_clean(_find_first(r"\bMULTIPLICADOR\s*:\s*([0-9\.,]+)\b", text, re.IGNORECASE))
     out["no_hilos"] = _find_first(r"\bNO\s+HILOS\s*:\s*([0-9]+)\b", text, re.IGNORECASE)
 
