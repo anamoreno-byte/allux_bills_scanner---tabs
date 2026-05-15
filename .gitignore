@@ -17,3 +17,24 @@ output/
 *.log
 data/parsed_csv/*
 data/logs/*
+
+# Local virtual environments
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Temporary scanner roots
+_tmp_single_mall_root/
+
+# Local runs / generated outputs
+runs/
+
+# Local data files with client information
+data/*.xlsx
+data/*.xls
+
+# macOS
+.DS_Store
