@@ -1,6 +1,7 @@
 from pathlib import Path
 import pandas as pd
 import streamlit as st
+import matplotlib.pyplot as plt
 
 
 # ============================================================
@@ -1694,17 +1695,86 @@ with tab_cc:
             | general_ocupados["_match_nombre_comercial"]
         )
 
+        # ============================================================
+        # Traer tarifa del parser a Datos Generales para análisis
+        # ============================================================
+
+        parser_tarifa_lookup = {}
+
+        if "tarifa" in cc_parser.columns:
+
+            if "cliente_nombre" in cc_parser.columns:
+                temp = cc_parser.copy()
+                temp["_key_cliente"] = normalize_key_series(temp["cliente_nombre"])
+                cliente_tarifa = (
+                    temp.dropna(subset=["tarifa"])
+                    .drop_duplicates(subset=["_key_cliente"])
+                    .set_index("_key_cliente")["tarifa"]
+                    .to_dict()
+                )
+                parser_tarifa_lookup.update(cliente_tarifa)
+
+            if "recibos_subgroup" in cc_parser.columns:
+                temp = cc_parser.copy()
+                temp["_key_nombre_comercial"] = normalize_key_series(temp["recibos_subgroup"])
+                nombre_tarifa = (
+                    temp.dropna(subset=["tarifa"])
+                    .drop_duplicates(subset=["_key_nombre_comercial"])
+                    .set_index("_key_nombre_comercial")["tarifa"]
+                    .to_dict()
+                )
+                parser_tarifa_lookup.update(nombre_tarifa)
+
+        def get_tarifa_from_parser(row):
+            cliente_key = row.get("_key_cliente")
+            nombre_key = row.get("_key_nombre_comercial")
+
+            if cliente_key in parser_tarifa_lookup:
+                return parser_tarifa_lookup[cliente_key]
+
+            if nombre_key in parser_tarifa_lookup:
+                return parser_tarifa_lookup[nombre_key]
+
+            for parser_key, tarifa_value in parser_tarifa_lookup.items():
+                if has_partial_match(cliente_key, [parser_key]):
+                    return tarifa_value
+
+                if has_partial_match(nombre_key, [parser_key]):
+                    return tarifa_value
+
+            return None
+
+        general_ocupados["TARIFA_ANALISIS"] = general_ocupados.apply(
+            get_tarifa_from_parser,
+            axis=1
+        )
+
+        if "TARIFA" in general_ocupados.columns:
+            general_ocupados["TARIFA_ANALISIS"] = general_ocupados["TARIFA_ANALISIS"].fillna(
+                general_ocupados["TARIFA"]
+            )
+
         locales_ocupados = len(general_ocupados)
         locales_con_recibo = int(general_ocupados["_tiene_recibo"].sum())
         locales_sin_recibo = int(locales_ocupados - locales_con_recibo)
         cobertura_pct = round((locales_con_recibo / locales_ocupados * 100), 1) if locales_ocupados else 0
 
-        st.markdown("### Calidad de muestra")
+        st.markdown(
+            '<div class="section-title">Calidad de muestra</div>',
+            unsafe_allow_html=True
+        )
 
         col_ocupacion, col_muestra = st.columns(2)
 
         with col_ocupacion:
-            st.subheader("Ocupación del centro comercial")
+            st.markdown(
+                """
+                <h4 style='margin-bottom:10px;'>
+                    Ocupación del centro comercial
+                </h4>
+                """,
+                unsafe_allow_html=True
+            )
 
             total_locales = len(general_cc_data)
             disponibles_vacios = int(disponible_o_vacio.sum())
@@ -1740,7 +1810,14 @@ with tab_cc:
             )
 
         with col_muestra:
-            st.subheader("Muestra disponible")
+            st.markdown(
+                """
+                <h4 style='margin-bottom:10px;'>
+                    Muestra disponible
+                </h4>
+                """,
+                unsafe_allow_html=True
+            )
 
             muestra_pie = pd.DataFrame({
                 "Estatus": ["Con recibo en parser", "Sin recibo en parser"],
@@ -1819,7 +1896,14 @@ with tab_cc:
             ~parser_unmatched["_match_dg"]
         ]
 
-        st.markdown("### Recibos encontrados en parser sin match en Datos Generales")
+        st.markdown(
+            """
+            <h4 style='margin-top:20px; margin-bottom:10px;'>
+                Recibos encontrados en parser sin match en Datos Generales
+            </h4>
+            """,
+            unsafe_allow_html=True
+        )
 
         st.write(
             "Servicios únicos en parser sin match:",
@@ -1843,6 +1927,666 @@ with tab_cc:
             use_container_width=True,
             height=600
         )
+
+        # ============================================================
+        # Composición de la muestra
+        # ============================================================
+
+        st.markdown(
+            """
+            <div class="section-title">Composición de la muestra</div>
+            """,
+            unsafe_allow_html=True
+        )
+
+        muestra_con_recibo = general_ocupados[
+            general_ocupados["_tiene_recibo"]
+        ].copy()
+
+        # ============================================================
+        # DIAGNÓSTICO TEMPORAL DE TARIFAS
+        # ============================================================
+
+
+        if muestra_con_recibo["TARIFA_ANALISIS"].isna().sum() > 0:
+
+            cols_debug = [
+                c for c in [
+                    "CLIENTE",
+                    "NOMBRE COMERCIAL",
+                    "No de Local",
+                    "TARIFA",
+                    "TARIFA_ANALISIS",
+                    "_tiene_recibo",
+                    "Criterio de cruce"
+                ]
+                if c in muestra_con_recibo.columns
+            ]
+
+            st.dataframe(
+                muestra_con_recibo[
+                    muestra_con_recibo["TARIFA_ANALISIS"].isna()
+                ][cols_debug],
+                use_container_width=True
+            )
+
+            st.write("Ejemplos parser:")
+
+            cols_debug = [
+                c for c in [
+                    "cliente_nombre",
+                    "recibos_subgroup",
+                    "tarifa",
+                    "no_servicio"
+                ]
+                if c in cc_parser.columns
+            ]
+
+            st.dataframe(
+                cc_parser[cols_debug],
+                use_container_width=True,
+                height=500
+            )
+
+        # ------------------------------------------------------------
+        # Número de usuarios por tarifa
+        # ------------------------------------------------------------
+
+        st.markdown(
+            """
+            <h5 style='margin-top:15px; margin-bottom:10px;'>
+                Número de usuarios por tarifa
+            </h5>
+            """,
+            unsafe_allow_html=True
+        )
+
+        if "TARIFA_ANALISIS" in muestra_con_recibo.columns and not muestra_con_recibo.empty:
+
+            tarifa_comp = (
+                muestra_con_recibo
+                .dropna(subset=["TARIFA_ANALISIS"])
+                .groupby("TARIFA_ANALISIS")
+                .size()
+                .reset_index(name="Número de usuarios")
+                .rename(columns={"TARIFA_ANALISIS": "Tarifa"})
+                .sort_values("Número de usuarios", ascending=False)
+            )
+
+            total_tarifa = tarifa_comp["Número de usuarios"].sum()
+
+            tarifa_comp["(%)"] = (
+                tarifa_comp["Número de usuarios"] / total_tarifa * 100
+            ).round(1)
+
+            tarifa_total_row = pd.DataFrame({
+                "Tarifa": ["Total"],
+                "Número de usuarios": [total_tarifa],
+                "(%)": [100.0]
+            })
+
+            tarifa_comp_display = pd.concat(
+                [tarifa_comp, tarifa_total_row],
+                ignore_index=True
+            )
+
+            tarifa_comp_display["(%)"] = (
+                tarifa_comp_display["(%)"]
+                .map(lambda x: f"{x:.1f}%")
+            )
+
+            col_tarifa_pie, col_tarifa_table = st.columns(2)
+
+            with col_tarifa_pie:
+                fig_tarifa = tarifa_comp.set_index("Tarifa").plot.pie(
+                    y="Número de usuarios",
+                    autopct="%1.1f%%",
+                    figsize=(5, 5),
+                    legend=False
+                ).figure
+
+                st.pyplot(fig_tarifa)
+
+            with col_tarifa_table:
+                st.dataframe(tarifa_comp_display, use_container_width=True)
+
+        else:
+            st.info("No hay información de tarifa para la muestra con recibo.")
+
+        # ------------------------------------------------------------
+        # Número de usuarios por giro comercial
+        # ------------------------------------------------------------
+
+        st.markdown(
+            """
+            <h5 style='margin-top:20px; margin-bottom:10px;'>
+                Número de usuarios por giro comercial
+            </h5>
+            """,
+            unsafe_allow_html=True
+        )
+
+        if "SUBGIRO_COMERCIAL" in muestra_con_recibo.columns and not muestra_con_recibo.empty:
+
+            muestra_con_recibo["GIRO_NORMALIZADO"] = (
+                muestra_con_recibo["SUBGIRO_COMERCIAL"]
+                .fillna("")
+                .astype(str)
+                .str.strip()
+                .str.title()
+            )
+
+            giro_comp = (
+                muestra_con_recibo
+                .dropna(subset=["GIRO_NORMALIZADO"])
+                .groupby("GIRO_NORMALIZADO")
+                .size()
+                .reset_index(name="Número de usuarios")
+                .rename(columns={"GIRO_NORMALIZADO": "Giro comercial"})
+                .sort_values("Número de usuarios", ascending=False)
+            )
+
+            giro_comp = giro_comp[
+                giro_comp["Giro comercial"].astype(str).str.strip() != ""
+            ]
+
+            total_giro = giro_comp["Número de usuarios"].sum()
+
+            giro_comp["(%)"] = (
+                giro_comp["Número de usuarios"] / total_giro * 100
+            ).round(1)
+
+            giro_total_row = pd.DataFrame({
+                "Giro comercial": ["Total"],
+                "Número de usuarios": [total_giro],
+                "(%)": [100.0]
+            })
+
+            giro_comp_display = pd.concat(
+                [giro_comp, giro_total_row],
+                ignore_index=True
+            )
+
+            giro_comp_display["(%)"] = (
+                giro_comp_display["(%)"]
+                .map(lambda x: f"{x:.1f}%")
+            )
+            col_giro_pie, col_giro_table = st.columns(2)
+
+            with col_giro_pie:
+                fig_giro = giro_comp.set_index("Giro comercial").plot.pie(
+                    y="Número de usuarios",
+                    autopct="%1.1f%%",
+                    figsize=(5, 5),
+                    legend=False
+                ).figure
+
+                st.pyplot(fig_giro)
+
+            with col_giro_table:
+                st.dataframe(
+                    giro_comp_display,
+                    use_container_width=True
+                )
+
+        else:
+            st.info("No hay información de giro comercial para la muestra con recibo.")
+
+        # ============================================================
+        # Demanda Real Vs Demanda Contratada
+        # ============================================================
+
+        st.markdown(
+            """
+            <div class="section-title">Demanda Real Vs Demanda Contratada</div>
+            """,
+            unsafe_allow_html=True
+        )
+
+        if (
+            "demanda_contratada_kw" in cc_parser.columns
+            and "carga_conectada_kw" in cc_parser.columns
+        ):
+
+            parser_demanda = cc_parser.copy()
+
+            parser_demanda["_key_cliente"] = (
+                normalize_key_series(parser_demanda["cliente_nombre"])
+                if "cliente_nombre" in parser_demanda.columns
+                else ""
+            )
+
+            parser_demanda["_key_nombre_comercial"] = (
+                normalize_key_series(parser_demanda["recibos_subgroup"])
+                if "recibos_subgroup" in parser_demanda.columns
+                else ""
+            )
+
+            parser_demanda["_demanda_contratada"] = clean_number_series(
+                parser_demanda["demanda_contratada_kw"]
+            )
+
+            parser_demanda["_demanda_real"] = clean_number_series(
+                parser_demanda["carga_conectada_kw"]
+            )
+
+            parser_demanda_lookup = {}
+
+            for _, r in parser_demanda.iterrows():
+
+                if pd.notna(r["_demanda_contratada"]) and pd.notna(r["_demanda_real"]):
+
+                    demanda_values = {
+                        "contratada": r["_demanda_contratada"],
+                        "real": r["_demanda_real"]
+                    }
+
+                    if r.get("_key_cliente"):
+                        parser_demanda_lookup[r["_key_cliente"]] = demanda_values
+
+                    if r.get("_key_nombre_comercial"):
+                        parser_demanda_lookup[r["_key_nombre_comercial"]] = demanda_values
+
+
+            def get_demanda_from_parser(row):
+
+                cliente_key = row.get("_key_cliente")
+                nombre_key = row.get("_key_nombre_comercial")
+
+                if cliente_key in parser_demanda_lookup:
+                    return parser_demanda_lookup[cliente_key]
+
+                if nombre_key in parser_demanda_lookup:
+                    return parser_demanda_lookup[nombre_key]
+
+                for parser_key, demanda_values in parser_demanda_lookup.items():
+
+                    if has_partial_match(cliente_key, [parser_key]):
+                        return demanda_values
+
+                    if has_partial_match(nombre_key, [parser_key]):
+                        return demanda_values
+
+                return None
+
+
+            demanda_df = muestra_con_recibo.copy()
+
+            demanda_df["_demanda_values"] = demanda_df.apply(
+                get_demanda_from_parser,
+                axis=1
+            )
+
+            demanda_df["Demanda contratada kW"] = (
+                demanda_df["_demanda_values"]
+                .apply(lambda x: x["contratada"] if isinstance(x, dict) else None)
+            )
+
+            demanda_df["Demanda real kW"] = (
+                demanda_df["_demanda_values"]
+                .apply(lambda x: x["real"] if isinstance(x, dict) else None)
+            )
+
+            demanda_df = demanda_df.dropna(
+                subset=[
+                    "Demanda contratada kW",
+                    "Demanda real kW"
+                ]
+            )
+
+            demanda_df = demanda_df[
+                demanda_df["Demanda contratada kW"] > 0
+            ]
+
+            demanda_df["Contratada (%)"] = 100
+
+            demanda_df["Real (%)"] = (
+                demanda_df["Demanda real kW"]
+                / demanda_df["Demanda contratada kW"]
+                * 100
+            )
+
+            demanda_df["Nombre Comercial"] = (
+                demanda_df["NOMBRE COMERCIAL"]
+            )
+
+            demanda_df["Tarifa"] = (
+                demanda_df["TARIFA_ANALISIS"]
+            )
+
+            demanda_df = demanda_df.sort_values(
+                ["Tarifa", "Nombre Comercial"]
+            )
+
+            if not demanda_df.empty:
+
+                orden_tarifas = {
+                    "GDMTH": 1,
+                    "GDMTO": 2,
+                    "PDBT": 3,
+                    "GDBT": 4
+                }
+
+                demanda_df["_orden_tarifa"] = (
+                    demanda_df["Tarifa"]
+                    .map(orden_tarifas)
+                    .fillna(999)
+                )
+
+                demanda_df = demanda_df.sort_values(
+                    ["_orden_tarifa", "Nombre Comercial"]
+                )
+
+                chart_df = demanda_df.set_index(
+                    "Nombre Comercial"
+                )[
+                    [
+                        "Contratada (%)",
+                        "Real (%)"
+                    ]
+                ]
+
+                fig, ax = plt.subplots(
+                    figsize=(max(16, len(chart_df) * 0.35), 6)
+                )
+
+                chart_df.plot(
+                    kind="bar",
+                    ax=ax
+                )
+
+                ax.set_ylim(0, 200)
+
+                # Segundo nivel de etiquetas: tarifa debajo de los nombres
+                tarifa_por_local = demanda_df.set_index("Nombre Comercial")["Tarifa"]
+
+                grupos_tarifa = (
+                    demanda_df
+                    .reset_index(drop=True)
+                    .groupby("Tarifa", sort=False)
+                    .apply(lambda x: (x.index.min(), x.index.max()))
+                )
+
+                for tarifa, (inicio, fin) in grupos_tarifa.items():
+                    centro = (inicio + fin) / 2
+
+                    ax.text(
+                        centro,
+                        -80,
+                        tarifa,
+                        ha="center",
+                        va="top",
+                        fontsize=11,
+                        fontweight="bold",
+                        transform=ax.transData
+                    )
+
+                    ax.axvline(
+                        fin + 0.5,
+                        color="lightgray",
+                        linewidth=0.8
+                    )
+
+                fig.subplots_adjust(bottom=0.50)
+
+                ax.set_ylim(0, 200)
+
+                ax.set_ylabel(
+                    "% de demanda contratada"
+                )
+
+                ax.set_xlabel(
+                    "Locales ocupados con recibo"
+                )
+
+                ax.set_title(
+                    "Demanda máxima como % de la demanda contratada"
+                )
+
+                ax.axhline(
+                    100,
+                    linestyle="--",
+                    linewidth=1
+                )
+
+                ax.tick_params(
+                    axis="x",
+                    rotation=90,
+                    labelsize=7
+                )
+
+                st.pyplot(fig)
+
+                st.dataframe(
+                    demanda_df[
+                        [
+                            "Tarifa",
+                            "Nombre Comercial",
+                            "Demanda contratada kW",
+                            "Demanda real kW",
+                            "Real (%)"
+                        ]
+                    ],
+                    use_container_width=True
+                )
+
+            else:
+
+                st.info(
+                    "No encontré registros con demanda contratada y demanda máxima."
+                )
+
+        else:
+
+            st.warning(
+                "No encontré las columnas demanda_contratada_kw o demanda_maxima_kw en el parser."
+            )
+
+        # ============================================================
+        # Densidad de demanda
+        # ============================================================
+
+        st.markdown(
+            """
+            <div class="section-title">Densidad de demanda</div>
+            """,
+            unsafe_allow_html=True
+        )
+
+        if "demanda_df" in locals() and not demanda_df.empty:
+
+            densidad_df = muestra_con_recibo.copy()
+
+            area_col_cc = first_existing_column(
+                densidad_df,
+                ["MTS2_num", "MTS2", "M2", "m2", "MTS 2", "SUPERFICIE", "SUPERFICIE M2"]
+            )
+
+            if area_col_cc:
+
+                if area_col_cc.endswith("_num"):
+                    densidad_df["Area m2"] = densidad_df[area_col_cc]
+                else:
+                    densidad_df["Area m2"] = clean_number_series(densidad_df[area_col_cc])
+
+                densidad_df = densidad_df.dropna(
+                    subset=["SUBGIRO_COMERCIAL", "Tarifa", "Nombre Comercial"]
+                ).copy()
+
+                densidad_df["Densidad de demanda W/m2"] = pd.NA
+
+                mask_densidad_valida = (
+                    densidad_df["Demanda real kW"].notna()
+                    & densidad_df["Area m2"].notna()
+                    & (densidad_df["Area m2"] > 0)
+                )
+
+                densidad_df.loc[mask_densidad_valida, "Densidad de demanda W/m2"] = (
+                    densidad_df.loc[mask_densidad_valida, "Demanda real kW"]
+                    * 1000
+                    / densidad_df.loc[mask_densidad_valida, "Area m2"]
+                )
+
+                giros_disponibles = sorted(
+                    densidad_df["SUBGIRO_COMERCIAL"]
+                    .dropna()
+                    .astype(str)
+                    .str.strip()
+                    .unique()
+                )
+
+                selected_giro_densidad = st.selectbox(
+                    "Selecciona un giro comercial",
+                    options=giros_disponibles,
+                    key="giro_densidad_selector"
+                )
+
+                densidad_giro = densidad_df[
+                    densidad_df["SUBGIRO_COMERCIAL"].astype(str).str.strip() == selected_giro_densidad
+                ].copy()
+
+                st.write(
+                    "Usuarios del giro en composición:",
+                    len(
+                        muestra_con_recibo[
+                            muestra_con_recibo["SUBGIRO_COMERCIAL"]
+                            .astype(str)
+                            .str.strip()
+                            == selected_giro_densidad
+                        ]
+                    )
+                )
+
+                st.write(
+                    "Usuarios del giro en densidad:",
+                    len(densidad_giro)
+                )
+
+                st.write(
+                    "Usuarios con densidad calculable:",
+                    densidad_giro["Densidad de demanda W/m2"].notna().sum()
+                )
+
+                # TODOS los usuarios del giro (para la tabla)
+                densidad_grafica = densidad_giro.dropna(
+                    subset=["Densidad de demanda W/m2"]
+                ).copy()
+
+                orden_tarifas_densidad = {
+                    "GDMTH": 1,
+                    "GDMTO": 2,
+                    "GDBT": 3,
+                    "PDBT": 4
+                }
+
+                densidad_giro["_orden_tarifa"] = (
+                    densidad_giro["Tarifa"]
+                    .map(orden_tarifas_densidad)
+                    .fillna(999)
+                )
+
+                densidad_grafica["_orden_tarifa"] = (
+                    densidad_grafica["Tarifa"]
+                    .map(orden_tarifas_densidad)
+                    .fillna(999)
+                )
+
+                densidad_grafica = densidad_grafica.sort_values(
+                    ["_orden_tarifa", "Nombre Comercial"]
+                ).reset_index(drop=True)
+
+                if not densidad_grafica.empty:
+
+                    promedio = densidad_grafica["Densidad de demanda W/m2"].mean()
+
+                    desv = densidad_grafica["Densidad de demanda W/m2"].std()
+
+                    densidad_grafica["x"] = range(len(densidad_grafica))
+
+                    fig, ax = plt.subplots(
+                        figsize=(max(14, len(densidad_grafica) * 0.35), 6)
+                    )
+
+                    ax.scatter(
+                        densidad_grafica["x"],
+                        densidad_grafica["Densidad de demanda W/m2"],
+                        label="Densidad de demanda"
+                    )
+
+                    ax.axhline(promedio, linewidth=1.5, label="Promedio")
+                    ax.axhline(promedio + desv, linewidth=1.5, label="+1 desv est")
+                    ax.axhline(max(promedio - desv, 0), linewidth=1.5, label="-1 desv est")
+
+                    ax.set_title(f"Densidad de demanda para {selected_giro_densidad}")
+                    ax.set_ylabel("Densidad de demanda (W/m2)")
+                    ax.set_xlabel("Locales ocupados con recibo")
+
+                    ax.set_xticks(densidad_grafica["x"])
+
+                    ax.set_xticklabels(
+                        densidad_grafica["Nombre Comercial"],
+                        rotation=90,
+                        fontsize=7
+                    )
+
+                    grupos_tarifa = (
+                        densidad_grafica
+                        .groupby("Tarifa", sort=False)
+                        .apply(lambda x: (x["x"].min(), x["x"].max()))
+                    )
+
+                    for tarifa, (inicio, fin) in grupos_tarifa.items():
+                        centro = (inicio + fin) / 2
+
+                        ax.text(
+                            centro,
+                            -0.22,
+                            tarifa,
+                            ha="center",
+                            va="top",
+                            fontsize=11,
+                            fontweight="bold",
+                            transform=ax.get_xaxis_transform()
+                        )
+
+                        ax.axvline(
+                            fin + 0.5,
+                            color="lightgray",
+                            linewidth=0.8
+                        )
+
+                    fig.subplots_adjust(bottom=0.45)
+
+                    ax.legend(
+                        loc="upper center",
+                        bbox_to_anchor=(0.5, -0.32),
+                        ncol=4
+                    )
+
+                    st.pyplot(fig)
+
+                    st.dataframe(
+                        densidad_giro[
+                            [
+                                "Tarifa",
+                                "Nombre Comercial",
+                                "SUBGIRO_COMERCIAL",
+                                "Demanda real kW",
+                                "Area m2",
+                                "Densidad de demanda W/m2"
+                            ]
+                        ],
+                        use_container_width=True
+                    )
+
+                else:
+                    st.info("No hay locales con datos suficientes para este giro comercial.")
+
+            else:
+                st.warning("No encontré columna de superficie/m2 para calcular densidad de demanda.")
+
+        else:
+            st.warning("Primero debe construirse la tabla de demanda para calcular densidad.")
 
     else:
         st.warning("No encontré columna de centro comercial.")
