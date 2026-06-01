@@ -172,7 +172,7 @@ def safe_preview_csv(path, title, nrows=50):
 # UI
 # ------------------------------------------------------------
 
-default_root = "/Users/jjesusricojericomelgoiza/Allux_Fraternity"
+default_root = r"G:\Unidades compartidas\1_Ingeniería\25-21 Análisis 19 CCs\1. Ingeniería de valor\4. Opción A"
 
 root_folder = st.text_input(
     "Carpeta raíz o centro comercial",
