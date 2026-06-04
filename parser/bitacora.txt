@@ -1,0 +1,93 @@
+jjesusricojericomelgoiza@192 allux_bills_scanner %  source /Users/jjesusricojericomelgoiza/allux_bills_scann
+er/venv/bin/activate
+(venv) jjesusricojericomelgoiza@192 allux_bills_scanner % 
+ *  History restored 
+
+jjesusricojericomelgoiza@Js-Mac-mini allux_bills_scanner % source venv/bin/activate 
+(venv) jjesusricojericomelgoiza@Js-Mac-mini allux_bills_scanner % python scanner.py --root "/ruta/a/Allux_Fraternity" --limit 20 --pages 2 --fresh
+Root path not found or not a dir: /ruta/a/Allux_Fraternity
+(venv) jjesusricojericomelgoiza@Js-Mac-mini allux_bills_scanner % ls
+README.md               data                    requirements.txt        venv
+__pycache__             output                  scanner.py
+analyze.py              parser                  test.txt
+(venv) jjesusricojericomelgoiza@Js-Mac-mini allux_bills_scanner % python scanner.py --root "/Users/jjesusricojericomelgoiza/Allux_Fraternity" --limit 20 --pages 2 --fresh --write-every 5
+[scan] root=/Users/jjesusricojericomelgoiza/Allux_Fraternity
+^CTraceback (most recent call last):
+  File "/Users/jjesusricojericomelgoiza/allux_bills_scanner/scanner.py", line 400, in <module>
+    main()
+  File "/Users/jjesusricojericomelgoiza/allux_bills_scanner/scanner.py", line 222, in main
+    pdfs = list_pdfs(root_path)
+  File "/Users/jjesusricojericomelgoiza/allux_bills_scanner/parser/scan.py", line 26, in list_pdfs
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
+  File "/Library/Frameworks/Python.framework/Versions/3.10/lib/python3.10/os.py", line 419, in _walk
+    yield from _walk(new_path, topdown, onerror, followlinks)
+  File "/Library/Frameworks/Python.framework/Versions/3.10/lib/python3.10/os.py", line 419, in _walk
+    yield from _walk(new_path, topdown, onerror, followlinks)
+  File "/Library/Frameworks/Python.framework/Versions/3.10/lib/python3.10/os.py", line 419, in _walk
+    yield from _walk(new_path, topdown, onerror, followlinks)
+  File "/Library/Frameworks/Python.framework/Versions/3.10/lib/python3.10/os.py", line 368, in _walk
+    entry = next(scandir_it)
+KeyboardInterrupt
+
+(venv) jjesusricojericomelgoiza@Js-Mac-mini allux_bills_scanner % 
+(venv) jjesusricojericomelgoiza@Js-Mac-mini allux_bills_scanner % python scanner.py --root "/Users/jjesusricojericomelgoiza/Allux_Fraternity" --pages 2 --resume --write-every 25
+[scan] root=/Users/jjesusricojericomelgoiza/Allux_Fraternity
+[scan] found_pdfs=6257
+[index] wrote 6257 rows => output/bills_index.csv
+[1/6257] /Users/jjesusricojericomelgoiza/Allux_Fraternity/01. V1_Ambar Fashion Mall Tuxtla/7. Recibos CFE/RECIBOS LUZ LOCATARIOS/15 CFE TUXTLA GUTIERREZ 671180400607 09082025 FACTURA.pdf
+[2/6257] /Users/jjesusricojericomelgoiza/Allux_Fraternity/01. V1_Ambar Fashion Mall Tuxtla/7. Recibos CFE/RECIBOS LUZ LOCATARIOS/ADIDAS.pdf
+[3/6257] /Users/jjesusricojericomelgoiza/Allux_Fraternity/01. V1_Ambar Fashion Mall Tuxtla/7. Recibos CFE/RECIBOS LUZ LOCATARIOS/ADOLFO DOMINGUEZ.pdf
+[4/6257] /Users/jjesusricojericomelgoiza/Allux_Fraternity/01. V1_Ambar Fashion Mall Tuxtla/7. Recibos CFE/RECIBOS LUZ LOCATARIOS/AT&T 1.pdf
+[5/6257] /Users/jjesusricojericomelgoiza/Allux_Fraternity/01. V1_Ambar Fashion Mall Tuxtla/7. Recibos CFE/RECIBOS LUZ LOCATARIOS/AT&T 2.pdf
+[6/6257] /Users/jjesusricojericomelgoiza/Allux_Fraternity/01. V1_Ambar Fashion Mall Tuxtla/7. Recibos CFE/RECIBOS LUZ LOCATARIOS/BARBER JASS.pdf
+[7/6257] /Users/jjesusricojericomelgoiza/Allux_Fraternity/01. V1_Ambar Fashion Mall Tuxtla/7. Recibos CFE/RECIBOS LUZ LOCATARIOS/BELLA PANDITA.pdf
+[8/6257] /Users/jjesusricojericomelgoiza/Allux_Fraternity/01. V1_Ambar Fashion Mall Tuxtla/7. Recibos CFE/RECIBOS LUZ LOCATARIOS/BEN & FRANK.pdf
+[9/6257] /Users/jjesusricojericomelgoiza/Allux_Fraternity/01. V1_Ambar Fashion Mall Tuxtla/7. Recibos CFE/RECIBOS LUZ LOCATARIOS/BUFFETE 168.pdf
+[10/6257] /Users/jjesusricojericomelgoiza/Allux_Fraternity/01. V1_Ambar Fashion Mall Tuxtla/7. Recibos CFE/RECIBOS LUZ LOCATARIOS/BURGUER KING.pdf
+[11/6257] /Users/jjesusricojericomelgoiza/Allux_Fraternity/01. V1_Ambar Fashion Mall Tuxtla/7. Recibos CFE/RECIBOS LUZ LOCATARIOS/Bellisima.pdf
+[12/6257] /Users/jjesusricojericomelgoiza/Allux_Fraternity/01. V1_Ambar Fashion Mall Tuxtla/7. Recibos CFE/RECIBOS LUZ LOCATARIOS/CACAO NATIVA.pdf
+[13/6257] /Users/jjesusricojericomelgoiza/Allux_Fraternity/01. V1_Ambar Fashion Mall Tuxtla/7. Recibos CFE/RECIBOS LUZ LOCATARIOS/CARLS JR.pdf
+[14/6257] /Users/jjesusricojericomelgoiza/Allux_Fraternity/01. V1_Ambar Fashion Mall Tuxtla/7. Recibos CFE/RECIBOS LUZ LOCATARIOS/CARTERS.pdf
+[15/6257] /Users/jjesusricojericomelgoiza/Allux_Fraternity/01. V1_Ambar Fashion Mall Tuxtla/7. Recibos CFE/RECIBOS LUZ LOCATARIOS/CHURRERIA PORFIRIO.pdf
+[16/6257] /Users/jjesusricojericomelgoiza/Allux_Fraternity/01. V1_Ambar Fashion Mall Tuxtla/7. Recibos CFE/RECIBOS LUZ LOCATARIOS/CRISTAL JOYAS.pdf
+[17/6257] /Users/jjesusricojericomelgoiza/Allux_Fraternity/01. V1_Ambar Fashion Mall Tuxtla/7. Recibos CFE/RECIBOS LUZ LOCATARIOS/CYA.pdf
+[18/6257] /Users/jjesusricojericomelgoiza/Allux_Fraternity/01. V1_Ambar Fashion Mall Tuxtla/7. Recibos CFE/RECIBOS LUZ LOCATARIOS/DDQ.pdf
+[19/6257] /Users/jjesusricojericomelgoiza/Allux_Fraternity/01. V1_Ambar Fashion Mall Tuxtla/7. Recibos CFE/RECIBOS LUZ LOCATARIOS/DOMINOS PIZZA.pdf
+[20/6257] /Users/jjesusricojericomelgoiza/Allux_Fraternity/01. V1_Ambar Fashion Mall Tuxtla/7. Recibos CFE/RECIBOS LUZ LOCATARIOS/DO„A MACHETES.pdf
+[21/6257] /Users/jjesusricojericomelgoiza/Allux_Fraternity/01. V1_Ambar Fashion Mall Tuxtla/7. Recibos CFE/RECIBOS LUZ LOCATARIOS/EL GALEON.pdf
+[22/6257] /Users/jjesusricojericomelgoiza/Allux_Fraternity/01. V1_Ambar Fashion Mall Tuxtla/7. Recibos CFE/RECIBOS LUZ LOCATARIOS/ELITE LOCKERS.pdf
+[23/6257] /Users/jjesusricojericomelgoiza/Allux_Fraternity/01. V1_Ambar Fashion Mall Tuxtla/7. Recibos CFE/RECIBOS LUZ LOCATARIOS/GOODTEA.pdf
+[24/6257] /Users/jjesusricojericomelgoiza/Allux_Fraternity/01. V1_Ambar Fashion Mall Tuxtla/7. Recibos CFE/RECIBOS LUZ LOCATARIOS/HANG TEN.pdf
+[25/6257] /Users/jjesusricojericomelgoiza/Allux_Fraternity/01. V1_Ambar Fashion Mall Tuxtla/7. Recibos CFE/RECIBOS LUZ LOCATARIOS/HIPOCAMPO.pdf
+[26/6257] /Users/jjesusricojericomelgoiza/Allux_Fraternity/01. V1_Ambar Fashion Mall Tuxtla/7. Recibos CFE/RECIBOS LUZ LOCATARIOS/HOMAY.pdf
+[27/6257] /Users/jjesusricojericomelgoiza/Allux_Fraternity/01. V1_Ambar Fashion Mall Tuxtla/7. Recibos CFE/RECIBOS LUZ LOCATARIOS/HOTEL.pdf
+[28/6257] /Users/jjesusricojericomelgoiza/Allux_Fraternity/01. V1_Ambar Fashion Mall Tuxtla/7. Recibos CFE/RECIBOS LUZ LOCATARIOS/JULIO.pdf
+[29/6257] /Users/jjesusricojericomelgoiza/Allux_Fraternity/01. V1_Ambar Fashion Mall Tuxtla/7. Recibos CFE/RECIBOS LUZ LOCATARIOS/KFC.pdf
+[30/6257] /Users/jjesusricojericomelgoiza/Allux_Fraternity/01. V1_Ambar Fashion Mall Tuxtla/7. Recibos CFE/RECIBOS LUZ LOCATARIOS/KIMUUL.pdf
+[31/6257] /Users/jjesusricojericomelgoiza/Allux_Fraternity/01. V1_Ambar Fashion Mall Tuxtla/7. Recibos CFE/RECIBOS LUZ LOCATARIOS/KLIPPERS.pdf
+[32/6257] /Users/jjesusricojericomelgoiza/Allux_Fraternity/01. V1_Ambar Fashion Mall Tuxtla/7. Recibos CFE/RECIBOS LUZ LOCATARIOS/LA BELLA PANDITA.pdf
+[33/6257] /Users/jjesusricojericomelgoiza/Allux_Fraternity/01. V1_Ambar Fashion Mall Tuxtla/7. Recibos CFE/RECIBOS LUZ LOCATARIOS/LACOSTE.pdf
+[34/6257] /Users/jjesusricojericomelgoiza/Allux_Fraternity/01. V1_Ambar Fashion Mall Tuxtla/7. Recibos CFE/RECIBOS LUZ LOCATARIOS/LEVIS.pdf
+[35/6257] /Users/jjesusricojericomelgoiza/Allux_Fraternity/01. V1_Ambar Fashion Mall Tuxtla/7. Recibos CFE/RECIBOS LUZ LOCATARIOS/LIDS.pdf
+^CTraceback (most recent call last):
+  File "/Users/jjesusricojericomelgoiza/allux_bills_scanner/scanner.py", line 400, in <module>
+    main()
+  File "/Users/jjesusricojericomelgoiza/allux_bills_scanner/scanner.py", line 292, in main
+    text, used_ocr, reason, len_pdfplumber, len_final = extract_text_with_robust_fallback(
+  File "/Users/jjesusricojericomelgoiza/allux_bills_scanner/scanner.py", line 170, in extract_text_with_robust_fallback
+    text_pdf = extract_text_pdfplumber(fp, max_pages=max_pages) or ""
+  File "/Users/jjesusricojericomelgoiza/allux_bills_scanner/parser/extract_text.py", line 13, in extract_text_pdfplumber
+    with pdfplumber.open(pdf_path) as pdf:
+  File "/Users/jjesusricojericomelgoiza/allux_bills_scanner/venv/lib/python3.10/site-packages/pdfplumber/pdf.py", line 107, in open
+    return cls(
+  File "/Users/jjesusricojericomelgoiza/allux_bills_scanner/venv/lib/python3.10/site-packages/pdfplumber/pdf.py", line 50, in __init__
+    self.doc = PDFDocument(PDFParser(stream), password=password or "")
+  File "/Users/jjesusricojericomelgoiza/allux_bills_scanner/venv/lib/python3.10/site-packages/pdfminer/pdfdocument.py", line 713, in __init__
+    pos = self.find_xref(parser)
+  File "/Users/jjesusricojericomelgoiza/allux_bills_scanner/venv/lib/python3.10/site-packages/pdfminer/pdfdocument.py", line 954, in find_xref
+    for line in parser.revreadlines():
+  File "/Users/jjesusricojericomelgoiza/allux_bills_scanner/venv/lib/python3.10/site-packages/pdfminer/psparser.py", line 258, in revreadlines
+    s = self.fp.read(prevpos - pos)
+KeyboardInterrupt
+
+(venv) jjesusricojericomelgoiza@Js-Mac-mini allux_bills_scanner % 

@@ -4,6 +4,7 @@ from pathlib import Path
 import argparse
 import re
 import time
+import math
 
 import pandas as pd
 
@@ -276,6 +277,28 @@ def numbers_in_line(line):
     return re.findall(r"[-+]?\$?\s?\d[\d,]*\.?\d*", line)
 
 
+def last_number_from_matching_lines(lines, patterns):
+    """
+    Busca líneas que coincidan con alguno de los patrones y regresa
+    el último número de la primera línea útil.
+
+    Esto evita capturar el (3) de notas como:
+        Cargo Factor de Potencia(3) 6,319.29
+
+    En ese caso regresa 6319.29, no 3.
+    """
+    for line in lines:
+        line_clean = normalize_spaces(line)
+
+        for pattern in patterns:
+            if re.search(pattern, line_clean, flags=re.IGNORECASE):
+                nums = numbers_in_line(line_clean)
+                if nums:
+                    return clean_number(nums[-1])
+
+    return None
+
+
 def extract_last_number_from_line_containing(text, keywords):
     """
     Busca una línea que contenga una palabra clave y regresa el último número.
@@ -328,9 +351,29 @@ def extract_number_after_pattern(text, pattern):
     return None
 
 
+def compute_power_factor_pct(kwh, kvarh):
+    """
+    Calcula factor de potencia a partir de energía activa y reactiva:
+        FP = kWh / sqrt(kWh^2 + kVArh^2) * 100
+    """
+    if kwh is None or kvarh is None:
+        return None
+
+    try:
+        kwh = float(kwh)
+        kvarh = float(kvarh)
+
+        if kwh <= 0:
+            return None
+
+        return round(100 * kwh / math.sqrt(kwh**2 + kvarh**2), 2)
+    except Exception:
+        return None
+
+
 def extract_gdm_fields_from_hourly_block(block):
     """
-    Extrae campos GDMTH/GDMTO directamente desde el bloque horario bruto.
+    Extrae campos GDMTH directamente desde el bloque horario bruto.
 
     Espera bloques tipo:
         base 56,217 kWh intermedia 223,915 kWh punta 23,537
@@ -403,11 +446,13 @@ def extract_gdm_fields_from_hourly_block(block):
         r"\bkVArh\b|\bkVARh\b",
     )
 
+    # En GDMTH normalmente sí aparece explícito como porcentaje después del bloque.
     result["factor_potencia_pct"] = extract_number_after_pattern(
         txt,
         r"Factor\s+de\s+potencia",
     )
 
+    # Si no viene explícito, calcular desde kWh total y kVArh.
     kwh_values = [
         result["kwh_base"],
         result["kwh_intermedia"],
@@ -421,6 +466,12 @@ def extract_gdm_fields_from_hourly_block(block):
         result["kwh_horario_check"] = "partial"
     else:
         result["kwh_horario_check"] = "not_found"
+
+    if result["factor_potencia_pct"] is None:
+        result["factor_potencia_pct"] = compute_power_factor_pct(
+            result["kwh_total_horario"],
+            result["kvarh"],
+        )
 
     return result
 
@@ -450,7 +501,7 @@ def extract_block_around_hourly_terms(text):
 
 def extract_gdm_fields(text):
     """
-    Extrae campos para tarifas horarias tipo GDMTH/GDMTO.
+    Extrae campos para tarifa GDMTH.
     """
     result = {
         "kwh_base": None,
@@ -471,8 +522,10 @@ def extract_gdm_fields(text):
     }
 
     txt = text or ""
+    lines = [normalize_spaces(ln) for ln in txt.splitlines()]
+    lines = [ln for ln in lines if ln]
 
-    if re.search(r"\bGDMTH\b|\bGDMTO\b|Base|Intermedia|Punta", txt, flags=re.IGNORECASE):
+    if re.search(r"\bGDMTH\b|Base|Intermedia|Punta", txt, flags=re.IGNORECASE):
         result["tarifa_horaria_detectada"] = True
 
     # Extracción inicial por líneas/etiquetas.
@@ -587,8 +640,10 @@ def extract_gdm_fields(text):
         ],
     )
 
-    result["bonificacion_factor_potencia"] = extract_first_number_after_label(
-        txt,
+    # Para bonificación/cargo usamos último número de la línea
+    # para evitar capturar la nota "(3)".
+    result["bonificacion_factor_potencia"] = last_number_from_matching_lines(
+        lines,
         [
             r"Bonificaci[oó]n\s+Factor\s+de\s+Potencia",
             r"Bonificaci[oó]n\s+por\s+Factor\s+de\s+Potencia",
@@ -597,8 +652,8 @@ def extract_gdm_fields(text):
         ],
     )
 
-    result["penalizacion_factor_potencia"] = extract_first_number_after_label(
-        txt,
+    result["penalizacion_factor_potencia"] = last_number_from_matching_lines(
+        lines,
         [
             r"Penalizaci[oó]n\s+Factor\s+de\s+Potencia",
             r"Cargo\s+Factor\s+de\s+Potencia",
@@ -617,6 +672,211 @@ def extract_gdm_fields(text):
     for key, value in block_fields.items():
         if value is not None:
             result[key] = value
+
+    return result
+
+
+def extract_gdmto_fields(text):
+    """
+    Extrae campos para tarifa GDMTO.
+
+    GDMTO no usa base/intermedia/punta como GDMTH.
+    Normalmente aparece una tabla con filas:
+
+        kWh    medidor    lectura actual    lectura anterior    diferencia    total
+        kW     medidor    lectura actual    lectura anterior    diferencia    total
+        kVArh  medidor    lectura actual    lectura anterior    diferencia    total
+
+    Esta función toma el último número de cada fila como total.
+    """
+    result = {
+        "kwh_base": None,
+        "kwh_intermedia": None,
+        "kwh_punta": None,
+        "kwh_total_horario": None,
+        "kwh_horario_check": None,
+
+        "kw_base": None,
+        "kw_intermedia": None,
+        "kw_punta": None,
+        "kwmax": None,
+
+        "kvarh": None,
+        "factor_potencia_pct": None,
+
+        "bonificacion_factor_potencia": None,
+        "penalizacion_factor_potencia": None,
+
+        "tarifa_horaria_detectada": False,
+        "bloque_tarifa_horaria_raw": None,
+    }
+
+    txt = text or ""
+
+    if re.search(r"\bGDMTO\b", txt, flags=re.IGNORECASE):
+        result["tarifa_horaria_detectada"] = True
+
+    lines = [normalize_spaces(ln) for ln in txt.splitlines()]
+    lines = [ln for ln in lines if ln]
+
+    # ------------------------------------------------------------
+    # Buscar filas principales de la tabla:
+    # kWh, kW, kVArh
+    # ------------------------------------------------------------
+    kwh_line = None
+    kw_line = None
+    kvarh_line = None
+
+    for line in lines:
+        # Evitar encabezados
+        if re.search(
+            r"Concepto|Lectura actual|Lectura anterior|Diferencia|Totales",
+            line,
+            flags=re.IGNORECASE,
+        ):
+            continue
+
+        if re.match(r"^kWh\b", line, flags=re.IGNORECASE):
+            kwh_line = line
+
+        elif re.match(r"^kW\b", line, flags=re.IGNORECASE):
+            # Importante: que no capture kWh ni kVArh
+            if not re.match(r"^kWh\b", line, flags=re.IGNORECASE):
+                kw_line = line
+
+        elif re.match(r"^kVArh\b", line, flags=re.IGNORECASE):
+            kvarh_line = line
+
+    if kwh_line:
+        nums = numbers_in_line(kwh_line)
+        if nums:
+            result["kwh_total_horario"] = clean_number(nums[-1])
+            result["kwh_horario_check"] = "ok_gdmto"
+
+    if kw_line:
+        nums = numbers_in_line(kw_line)
+        if nums:
+            result["kwmax"] = clean_number(nums[-1])
+
+    if kvarh_line:
+        nums = numbers_in_line(kvarh_line)
+        if nums:
+            result["kvarh"] = clean_number(nums[-1])
+
+    # ------------------------------------------------------------
+    # Si no encontró por líneas, intentar patrón compacto.
+    # A veces pdf extraction junta fragmentos en una sola línea.
+    # ------------------------------------------------------------
+    flat = re.sub(r"\s+", " ", txt)
+
+    if result["kwh_total_horario"] is None:
+        m = re.search(
+            r"\bkWh\b\s+\S+\s+"
+            r"([-+]?\d[\d,]*\.?\d*)\s+"
+            r"([-+]?\d[\d,]*\.?\d*)\s+"
+            r"([-+]?\d[\d,]*\.?\d*)\s+"
+            r"([-+]?\d[\d,]*\.?\d*)",
+            flat,
+            flags=re.IGNORECASE,
+        )
+        if m:
+            result["kwh_total_horario"] = clean_number(m.group(4))
+            result["kwh_horario_check"] = "ok_gdmto_flat"
+
+    if result["kwmax"] is None:
+        m = re.search(
+            r"\bkW\b\s+\S+\s+"
+            r"([-+]?\d[\d,]*\.?\d*)\s+"
+            r"([-+]?\d[\d,]*\.?\d*)\s+"
+            r"([-+]?\d[\d,]*\.?\d*)\s+"
+            r"([-+]?\d[\d,]*\.?\d*)",
+            flat,
+            flags=re.IGNORECASE,
+        )
+        if m:
+            result["kwmax"] = clean_number(m.group(4))
+
+    if result["kvarh"] is None:
+        m = re.search(
+            r"\bkVArh\b\s+\S+\s+"
+            r"([-+]?\d[\d,]*\.?\d*)\s+"
+            r"([-+]?\d[\d,]*\.?\d*)\s+"
+            r"([-+]?\d[\d,]*\.?\d*)\s+"
+            r"([-+]?\d[\d,]*\.?\d*)",
+            flat,
+            flags=re.IGNORECASE,
+        )
+        if m:
+            result["kvarh"] = clean_number(m.group(4))
+
+    # ------------------------------------------------------------
+    # Factor de potencia
+    #
+    # Para GDMTO lo calculamos desde kWh y kVArh.
+    # Esto evita confundir el monto de bonificación/cargo con FP.
+    # ------------------------------------------------------------
+    result["factor_potencia_pct"] = compute_power_factor_pct(
+        result["kwh_total_horario"],
+        result["kvarh"],
+    )
+
+    # ------------------------------------------------------------
+    # Bonificación / penalización por factor de potencia
+    #
+    # Tomamos el último número de la línea, no el primero.
+    # Así evitamos capturar "(3)".
+    # ------------------------------------------------------------
+    result["bonificacion_factor_potencia"] = last_number_from_matching_lines(
+        lines,
+        [
+            r"Bonificaci[oó]n\s+Factor\s+de\s+Potencia",
+            r"Bonificaci[oó]n\s+por\s+Factor\s+de\s+Potencia",
+            r"Bonificaci[oó]n\s+FP",
+            r"Bonificaci[oó]n",
+        ],
+    )
+
+    result["penalizacion_factor_potencia"] = last_number_from_matching_lines(
+        lines,
+        [
+            r"Penalizaci[oó]n\s+Factor\s+de\s+Potencia",
+            r"Cargo\s+Factor\s+de\s+Potencia",
+            r"Penalizaci[oó]n\s+FP",
+            r"Penalizaci[oó]n",
+        ],
+    )
+
+    # ------------------------------------------------------------
+    # Bloque bruto para auditoría
+    # ------------------------------------------------------------
+    block_lines = []
+
+    for line in lines:
+        if re.match(r"^kWh\b", line, flags=re.IGNORECASE):
+            block_lines.append(line)
+        elif re.match(r"^kW\b", line, flags=re.IGNORECASE) and not re.match(
+            r"^kWh\b",
+            line,
+            flags=re.IGNORECASE,
+        ):
+            block_lines.append(line)
+        elif re.match(r"^kVArh\b", line, flags=re.IGNORECASE):
+            block_lines.append(line)
+        elif re.search(r"Factor\s+de\s+potencia", line, flags=re.IGNORECASE):
+            block_lines.append(line)
+        elif re.search(r"Bonificaci[oó]n\s+Factor\s+de\s+Potencia", line, flags=re.IGNORECASE):
+            block_lines.append(line)
+        elif re.search(r"Cargo\s+Factor\s+de\s+Potencia", line, flags=re.IGNORECASE):
+            block_lines.append(line)
+
+    if block_lines:
+        result["bloque_tarifa_horaria_raw"] = " | ".join(block_lines)
+
+    if result["kwh_horario_check"] is None:
+        if result["kwh_total_horario"] is not None:
+            result["kwh_horario_check"] = "ok_gdmto"
+        else:
+            result["kwh_horario_check"] = "not_found_gdmto"
 
     return result
 
@@ -775,18 +1035,21 @@ def enrich_dataframe(
             for key, value in address_fields.items():
                 df.at[idx, key] = value
 
-            if "GDMTH" in tarifa or "GDMTO" in tarifa:
+            if "GDMTH" in tarifa:
                 tariff_fields = extract_gdm_fields(text)
 
                 for key, value in tariff_fields.items():
                     df.at[idx, key] = value
 
-                if "GDMTH" in tarifa:
-                    df.at[idx, "enrichment_tariff_mode"] = "GDMTH"
-                elif "GDMTO" in tarifa:
-                    df.at[idx, "enrichment_tariff_mode"] = "GDMTO"
-                else:
-                    df.at[idx, "enrichment_tariff_mode"] = tarifa
+                df.at[idx, "enrichment_tariff_mode"] = "GDMTH"
+
+            elif "GDMTO" in tarifa:
+                tariff_fields = extract_gdmto_fields(text)
+
+                for key, value in tariff_fields.items():
+                    df.at[idx, key] = value
+
+                df.at[idx, "enrichment_tariff_mode"] = "GDMTO"
 
             else:
                 df.at[idx, "enrichment_tariff_mode"] = tarifa
