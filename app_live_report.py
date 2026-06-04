@@ -12,8 +12,8 @@ PROJECT_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = PROJECT_DIR / "output"
 DATA_DIR = PROJECT_DIR / "data"
 
-DEFAULT_PARSED_CSV = OUTPUT_DIR / "bills_parsed_v2_RUN_9232.csv"
-DEFAULT_HISTORICO_CSV = OUTPUT_DIR / "bills_historico_v2_RUN_33733.csv"
+DEFAULT_PARSED_CSV = OUTPUT_DIR / "bills_parsed_v2_RUN_9933.csv"
+DEFAULT_HISTORICO_CSV = OUTPUT_DIR / "bills_historico_v2_RUN_9933.csv"
 DEFAULT_GENERAL_DATA = DATA_DIR / "260414_Datos Generales_19 CC.xlsx"
 
 
@@ -626,11 +626,12 @@ else:
     filtered_enriched = filtered.copy()
 
 
-tab_resumen, tab_calidad, tab_general, tab_cc = st.tabs([
+tab_resumen, tab_calidad, tab_general, tab_cc, tab_anexo = st.tabs([
     "Resumen Ejecutivo",
     "Calidad de Datos",
     "Análisis General",
-    "Centro Comercial"
+    "Centro Comercial",
+    "Anexo"
 ])
 
 with tab_resumen:
@@ -714,13 +715,6 @@ with tab_calidad:
             })
 
     quality_df = pd.DataFrame(quality_cols)
-
-    if not quality_df.empty:
-        st.dataframe(quality_df, use_container_width=True)
-        chart_df = quality_df.set_index("campo")[["cobertura_%"]]
-        st.bar_chart(chart_df)
-    else:
-        st.info("No hay columnas suficientes para calcular cobertura de campos.")
 
     st.markdown("### Cobertura de muestra por centro comercial")
 
@@ -1009,8 +1003,15 @@ with tab_calidad:
         )
 
         st.dataframe(mall_quality, use_container_width=True)
+
+    if not quality_df.empty:
+        st.dataframe(quality_df, use_container_width=True)
+        chart_df = quality_df.set_index("campo")[["cobertura_%"]]
+        st.bar_chart(chart_df)
     else:
-        st.warning("No encontré columna de centro comercial.")
+        st.info("No hay columnas suficientes para calcular cobertura de campos.")
+
+
 
 
 with tab_general:
@@ -2397,6 +2398,19 @@ with tab_cc:
 
             densidad_df = muestra_con_recibo.copy()
 
+            densidad_df["Nombre Comercial"] = (
+                densidad_df["NOMBRE COMERCIAL"]
+                if "NOMBRE COMERCIAL" in densidad_df.columns
+                else densidad_df["CLIENTE"]
+            )
+
+            densidad_df["Tarifa"] = densidad_df["TARIFA_ANALISIS"]
+
+            if "demanda_maxima_kw" in cc_parser.columns:
+                demanda_real_parser_col = "demanda_maxima_kw"
+            else:
+                demanda_real_parser_col = None
+
             area_col_cc = first_existing_column(
                 densidad_df,
                 ["MTS2_num", "MTS2", "M2", "m2", "MTS 2", "SUPERFICIE", "SUPERFICIE M2"]
@@ -2409,11 +2423,85 @@ with tab_cc:
                 else:
                     densidad_df["Area m2"] = clean_number_series(densidad_df[area_col_cc])
 
+                if demanda_real_parser_col:
+                    parser_demanda_real = cc_parser.copy()
+            
+            area_col_cc = first_existing_column(
+                densidad_df,
+                ["MTS2_num", "MTS2", "M2", "m2", "MTS 2", "SUPERFICIE", "SUPERFICIE M2"]
+            )
+
+            if area_col_cc:
+
+
+
+                if demanda_real_parser_col:
+
+                    parser_demanda_real = cc_parser.copy()
+
+                    parser_demanda_real["_key_cliente"] = (
+                        normalize_key_series(parser_demanda_real["cliente_nombre"])
+                        if "cliente_nombre" in parser_demanda_real.columns
+                        else ""
+                    )
+
+                    parser_demanda_real["_key_nombre_comercial"] = (
+                        normalize_key_series(parser_demanda_real["recibos_subgroup"])
+                        if "recibos_subgroup" in parser_demanda_real.columns
+                        else ""
+                    )
+
+                    parser_demanda_real["_demanda_real_kw"] = clean_number_series(
+                        parser_demanda_real[demanda_real_parser_col]
+                    )
+
+                    demanda_real_lookup = {}
+
+                    for _, r in parser_demanda_real.dropna(subset=["_demanda_real_kw"]).iterrows():
+
+                        if r.get("_key_cliente"):
+                            demanda_real_lookup[r["_key_cliente"]] = r["_demanda_real_kw"]
+
+                        if r.get("_key_nombre_comercial"):
+                            demanda_real_lookup[r["_key_nombre_comercial"]] = r["_demanda_real_kw"]
+
+                    def get_demanda_real_from_parser(row):
+                        cliente_key = row.get("_key_cliente")
+                        nombre_key = row.get("_key_nombre_comercial")
+
+                        if cliente_key in demanda_real_lookup:
+                            return demanda_real_lookup[cliente_key]
+
+                        if nombre_key in demanda_real_lookup:
+                            return demanda_real_lookup[nombre_key]
+
+                        for parser_key, demanda_value in demanda_real_lookup.items():
+                            if has_partial_match(cliente_key, [parser_key]):
+                                return demanda_value
+
+                            if has_partial_match(nombre_key, [parser_key]):
+                                return demanda_value
+
+                        return None
+
+                    densidad_df["Demanda real kW"] = densidad_df.apply(
+                        get_demanda_real_from_parser,
+                        axis=1
+                    )
+
+                else:
+                    densidad_df["Demanda real kW"] = pd.NA
+
+                    st.info(
+                        "Todavía no encontré `demanda_maxima_kw` en el parser. "
+                        "La sección queda lista y se calculará cuando vuelvas a correr el parser con esa columna."
+                    )
+
                 densidad_df = densidad_df.dropna(
                     subset=["SUBGIRO_COMERCIAL", "Tarifa", "Nombre Comercial"]
                 ).copy()
 
-                densidad_df["Densidad de demanda W/m2"] = pd.NA
+                densidad_df["Densidad de demanda kW/m2"] = pd.NA
 
                 mask_densidad_valida = (
                     densidad_df["Demanda real kW"].notna()
@@ -2421,9 +2509,8 @@ with tab_cc:
                     & (densidad_df["Area m2"] > 0)
                 )
 
-                densidad_df.loc[mask_densidad_valida, "Densidad de demanda W/m2"] = (
+                densidad_df.loc[mask_densidad_valida, "Densidad de demanda kW/m2"] = (
                     densidad_df.loc[mask_densidad_valida, "Demanda real kW"]
-                    * 1000
                     / densidad_df.loc[mask_densidad_valida, "Area m2"]
                 )
 
@@ -2464,12 +2551,12 @@ with tab_cc:
 
                 st.write(
                     "Usuarios con densidad calculable:",
-                    densidad_giro["Densidad de demanda W/m2"].notna().sum()
+                    densidad_giro["Densidad de demanda kW/m2"].notna().sum()
                 )
 
                 # TODOS los usuarios del giro (para la tabla)
                 densidad_grafica = densidad_giro.dropna(
-                    subset=["Densidad de demanda W/m2"]
+                    subset=["Densidad de demanda kW/m2"]
                 ).copy()
 
                 orden_tarifas_densidad = {
@@ -2497,9 +2584,9 @@ with tab_cc:
 
                 if not densidad_grafica.empty:
 
-                    promedio = densidad_grafica["Densidad de demanda W/m2"].mean()
+                    promedio = densidad_grafica["Densidad de demanda kW/m2"].mean()
 
-                    desv = densidad_grafica["Densidad de demanda W/m2"].std()
+                    desv = densidad_grafica["Densidad de demanda kW/m2"].std()
 
                     densidad_grafica["x"] = range(len(densidad_grafica))
 
@@ -2509,7 +2596,7 @@ with tab_cc:
 
                     ax.scatter(
                         densidad_grafica["x"],
-                        densidad_grafica["Densidad de demanda W/m2"],
+                        densidad_grafica["Densidad de demanda kW/m2"],
                         label="Densidad de demanda"
                     )
 
@@ -2518,7 +2605,7 @@ with tab_cc:
                     ax.axhline(max(promedio - desv, 0), linewidth=1.5, label="-1 desv est")
 
                     ax.set_title(f"Densidad de demanda para {selected_giro_densidad}")
-                    ax.set_ylabel("Densidad de demanda (W/m2)")
+                    ax.set_ylabel("Densidad de demanda (kW/m2)")
                     ax.set_xlabel("Locales ocupados con recibo")
 
                     ax.set_xticks(densidad_grafica["x"])
@@ -2573,7 +2660,7 @@ with tab_cc:
                                 "SUBGIRO_COMERCIAL",
                                 "Demanda real kW",
                                 "Area m2",
-                                "Densidad de demanda W/m2"
+                                "Densidad de demanda kW/m2"
                             ]
                         ],
                         use_container_width=True
@@ -2590,3 +2677,78 @@ with tab_cc:
 
     else:
         st.warning("No encontré columna de centro comercial.")
+
+
+with tab_anexo:
+
+    st.markdown(
+        '<div class="section-title">Anexo metodológico</div>',
+        unsafe_allow_html=True
+    )
+
+    st.markdown("### Metodología de estimación de demanda real anual")
+
+    metodologia_df = pd.DataFrame({
+        "Tarifa": ["GDMTH", "GDMTO", "GDBT", "PDBT"],
+        "Criterio de demanda real anual": [
+            "Máximo anual de KWMax",
+            "Máximo anual de kW Totales",
+            "Máximo anual de kW Totales",
+            "Máximo anual estimado con perfil horario comercial"
+        ],
+        "Tipo de dato": [
+            "Medido en recibo",
+            "Medido en recibo",
+            "Medido en recibo",
+            "Estimado"
+        ]
+    })
+
+    st.dataframe(metodologia_df, use_container_width=True)
+
+    st.markdown("### Perfil horario comercial genérico para PDBT")
+
+    perfil_df = pd.DataFrame({
+        "Hora": list(range(24)),
+        "Peso relativo": [
+            0.01, 0.01, 0.01, 0.01,
+            0.02, 0.03, 0.04, 0.06,
+            0.08, 0.10, 0.12, 0.13,
+            0.13, 0.13, 0.12, 0.11,
+            0.10, 0.09, 0.07, 0.05,
+            0.03, 0.02, 0.01, 0.01
+        ]
+    })
+
+    perfil_df["Peso normalizado"] = (
+        perfil_df["Peso relativo"] / perfil_df["Peso relativo"].sum()
+    )
+
+    st.dataframe(perfil_df, use_container_width=True)
+
+    fig, ax = plt.subplots(figsize=(10, 4))
+
+    ax.plot(
+        perfil_df["Hora"],
+        perfil_df["Peso normalizado"]
+    )
+
+    ax.set_xlabel("Hora del día")
+    ax.set_ylabel("Peso normalizado")
+    ax.set_title("Perfil horario comercial genérico para estimación PDBT")
+
+    st.pyplot(fig)
+
+    st.markdown("### Referencias")
+
+    st.markdown("""
+**NREL / DOE End-Use Load Profiles for the U.S. Building Stock**  
+https://data.openei.org/submissions/4520
+
+**DOE Commercial Prototype Building Models**  
+https://www.energycodes.gov/prototype-building-models
+
+**Nota:** el perfil mostrado es temporal para probar la estructura del dashboard. 
+Después debe sustituirse por el perfil horario real descargado de NREL/DOE.
+""")
+
