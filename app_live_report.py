@@ -2,6 +2,8 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
+import numpy as np
+import re
 
 
 # ============================================================
@@ -78,6 +80,7 @@ def read_csv_safe(path: Path) -> pd.DataFrame:
     """
     Reads a CSV robustly.
     """
+
     if not path.exists() or path.stat().st_size == 0:
         return pd.DataFrame()
 
@@ -191,6 +194,23 @@ def normalize_text_key(s: pd.Series) -> pd.Series:
         .replace({"NAN": None, "NONE": None, "": None})
     )
 
+def limpiar_nombre_cc(nombre):
+    if pd.isna(nombre):
+        return ""
+
+    nombre = str(nombre).strip()
+
+    # Quita prefijos tipo: 01. V1_ / 01_V1_ / V1_
+    nombre = re.sub(r"^\s*\d+\s*[\.\-_]\s*", "", nombre)
+    nombre = re.sub(r"^\s*V\d+[_\-\s]*", "", nombre, flags=re.IGNORECASE)
+
+    # Reemplaza guiones bajos por espacios
+    nombre = nombre.replace("_", " ")
+
+    # Limpia espacios dobles
+    nombre = re.sub(r"\s+", " ", nombre).strip()
+
+    return nombre
 
 def first_existing_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
     """
@@ -371,6 +391,36 @@ def format_mxn_per_kwh(x):
         return "—"
     return f"${x:,.2f}"
 
+def construir_perfil_mensual_nrel(profile_path):
+
+    df = pd.read_csv(profile_path)
+
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+
+    energy_col = "out.electricity.total.energy_consumption.kwh"
+
+    df["mes"] = df["timestamp"].dt.month
+    df["hora"] = df["timestamp"].dt.hour
+
+    perfil_mensual = (
+        df.groupby(["mes", "hora"])[energy_col]
+        .mean()
+        .reset_index(name="peso")
+    )
+
+    # Normaliza cada mes como perfil de un día promedio:
+    # la suma de las 24 horas del mes = 1 día típico
+    perfil_mensual["peso_normalizado"] = (
+        perfil_mensual.groupby("mes")["peso"]
+        .transform(lambda x: x / x.sum())
+    )
+
+    perfil_mensual["peso_max_horario_mes"] = (
+        perfil_mensual.groupby("mes")["peso_normalizado"]
+        .transform("max")
+    )
+
+    return perfil_mensual
 
 # ============================================================
 # Header
@@ -626,13 +676,97 @@ else:
     filtered_enriched = filtered.copy()
 
 
-tab_resumen, tab_calidad, tab_general, tab_cc, tab_anexo = st.tabs([
+tab_resumen, tab_calidad, tab_general, tab_cc, tab_sg, tab_anexo = st.tabs([
     "Resumen Ejecutivo",
     "Calidad de Datos",
-    "Análisis General",
+    "Portafolio",
     "Centro Comercial",
+    "Servicios Generales",
     "Anexo"
 ])
+
+def normalizar_texto_simple(value):
+    if pd.isna(value):
+        return ""
+
+    return (
+        str(value)
+        .strip()
+        .upper()
+        .replace("Á", "A")
+        .replace("É", "E")
+        .replace("Í", "I")
+        .replace("Ó", "O")
+        .replace("Ú", "U")
+        .replace("Ñ", "N")
+    )
+
+
+def obtener_tipo_perfil_nrel(subgiro_comercial, tipo_local):
+    subgiro = normalizar_texto_simple(subgiro_comercial)
+    tipo = normalizar_texto_simple(tipo_local)
+
+    if "ALIMENTOS" in subgiro or "BEBIDAS" in subgiro:
+        if "FOOD COURT" in tipo:
+            return "quickservicerestaurant", "Comida rápida (Quick Service Restaurant)"
+        else:
+            return "fullservicerestaurant", "Restaurante (Full Service Restaurant)"
+
+    if "TIENDAS DEPARTAMENTALES" in subgiro:
+        return "retailstandalone", "Tienda departamental (Retail Standalone)"
+
+    return "retailstripmall", "Local comercial (Retail Strip Mall)"
+
+
+def obtener_zona_nrel_por_cc(centro_comercial, climate_mapping_df):
+    centro_key = normalizar_texto_simple(centro_comercial)
+
+    if climate_mapping_df.empty:
+        return None
+
+    for _, row in climate_mapping_df.iterrows():
+        cc_map_key = normalizar_texto_simple(row.get("centro_comercial", ""))
+
+        if cc_map_key and (cc_map_key in centro_key or centro_key in cc_map_key):
+            return row.get("zona_nrel")
+
+    return None
+
+def crear_demanda_real_anual_template(muestra_con_recibo, climate_mapping_df):
+    rows = []
+
+    for _, row in muestra_con_recibo.iterrows():
+
+        centro_comercial = row.get("NOMBRE DEL CC", row.get("mall_folder", ""))
+        subgiro = row.get("SUBGIRO_COMERCIAL", "")
+        tipo_local = row.get("TIPO LOCAL", "")
+        tarifa = row.get("TARIFA_ANALISIS", row.get("TARIFA", ""))
+
+        zona_nrel = obtener_zona_nrel_por_cc(
+            centro_comercial,
+            climate_mapping_df
+        )
+
+        perfil_code, perfil_nombre = obtener_tipo_perfil_nrel(
+            subgiro,
+            tipo_local
+        )
+
+        rows.append({
+            "centro_comercial": centro_comercial,
+            "cliente": row.get("CLIENTE", ""),
+            "nombre_comercial": row.get("NOMBRE COMERCIAL", ""),
+            "no_local": row.get("No de Local", ""),
+            "subgiro_comercial": subgiro,
+            "tipo_local": tipo_local,
+            "tarifa": tarifa,
+            "zona_nrel": zona_nrel,
+            "perfil_nrel_code": perfil_code,
+            "perfil_nrel_nombre": perfil_nombre,
+            "demanda_real_anual_kw": pd.NA,
+            "criterio_demanda": pd.NA
+        })
+    return pd.DataFrame(rows)
 
 with tab_resumen:
     # ============================================================
@@ -684,11 +818,199 @@ with tab_resumen:
         """,
         unsafe_allow_html=True
     )
+
     # ============================================================
-    # Data quality
+    # Benchmark de densidad de demanda
     # ============================================================
+
+    st.markdown("### Benchmark de densidad de demanda")
+
+    st.caption(
+        "Esta sección mostrará la densidad de demanda por giro comercial "
+        "filtrando por clima y tipo de centro comercial. "
+        "Se activará cuando exista la columna de densidad calculada."
+    )
+
+    cc_master_path = DATA_DIR / "profiles" / "cc_master_data.csv"
+
+    if cc_master_path.exists():
+
+        cc_master_df = pd.read_csv(cc_master_path)
+        cc_master_df.columns = cc_master_df.columns.str.strip()
+
+        clima_selector = st.selectbox(
+            "Selecciona clima",
+            ["Cálido", "Templado", "Frío"],
+            key="benchmark_clima"
+        )
+
+        tipo_cc_selector = st.selectbox(
+            "Selecciona tipo de centro comercial",
+            [
+                "Luxury Fashion Mall",
+                "Fashion Mall",
+                "Regional Mall",
+                "Power Center",
+                "Strip Mall"
+            ],
+            key="benchmark_tipo_cc"
+        )
+
+        # Placeholder hasta que exista la densidad real
+        densidad_col = first_existing_column(
+            locals().get("demanda_real_anual_df", pd.DataFrame()),
+            [
+                "densidad_demanda_w_m2",
+                "Densidad de demanda W/m2",
+                "densidad_demanda_kw_m2",
+                "Densidad de demanda kW/m2"
+            ]
+        )
+
+        if "demanda_real_anual_df" in locals() and densidad_col:
+
+            benchmark_df = demanda_real_anual_df.copy()
+
+            benchmark_filtrado = benchmark_df[
+                (benchmark_df["macro_clima"] == clima_selector)
+                & (benchmark_df["tipo_cc"] == tipo_cc_selector)
+            ].copy()
+
+            if not benchmark_filtrado.empty:
+
+                resumen_benchmark = (
+                    benchmark_filtrado
+                    .groupby("subgiro_comercial")
+                    .agg(
+                        densidad_promedio=(densidad_col, "mean"),
+                        densidad_std=(densidad_col, "std"),
+                        no_locales=("subgiro_comercial", "size")
+                    )
+                    .reset_index()
+                    .rename(columns={
+                        "subgiro_comercial": "Giro comercial",
+                        "densidad_promedio": "Densidad de demanda promedio",
+                        "no_locales": "No. de locales en la muestra"
+                    })
+                )
+
+                resumen_benchmark["CV (%)"] = (
+                    resumen_benchmark["densidad_std"]
+                    / resumen_benchmark["Densidad de demanda promedio"]
+                    * 100
+                ).round(1)
+
+                def clasificar_confiabilidad(row):
+                    n = row["No. de locales en la muestra"]
+                    cv = row["CV (%)"]
+
+                    if n < 10:
+                        return "🔴 Baja"
+
+                    if pd.isna(cv):
+                        return "🔴 Baja"
+
+                    if cv < 5:
+                        return "🟢 Alta"
+
+                    if cv <= 10:
+                        return "🟡 Media"
+
+                    return "🔴 Baja"
+
+                resumen_benchmark["Confiabilidad"] = resumen_benchmark.apply(
+                    clasificar_confiabilidad,
+                    axis=1
+                )
+
+                resumen_benchmark = resumen_benchmark[
+                    [
+                        "Giro comercial",
+                        "Densidad de demanda promedio",
+                        "No. de locales en la muestra",
+                        "CV (%)",
+                        "Confiabilidad"
+                    ]
+                ]
+
+                st.dataframe(
+                    resumen_benchmark,
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+                st.caption(
+                    "Confiabilidad: 🟢 Alta si CV < 5% y muestra ≥ 10 locales; "
+                    "🟡 Media si CV entre 5% y 10% y muestra ≥ 10 locales; "
+                    "🔴 Baja si CV > 10% o muestra < 10 locales."
+                )
+
+            else:
+                st.info("No hay datos para la combinación seleccionada.")
+
+        else:
+            st.info(
+                "La tabla se llenará cuando el modelo genere "
+                "`demanda_real_anual_df` con densidad de demanda por local."
+            )
+
+    else:
+        st.warning(f"No encontré el archivo maestro de centros comerciales: {cc_master_path}")    
+
+
+
+# ============================================================
+# Data quality
+# ============================================================
 with tab_calidad:
     st.markdown('<div class="section-title">2. Calidad de datos</div>', unsafe_allow_html=True)
+
+    st.markdown("### Representatividad de la muestra")
+
+    universo_cc = 119
+    muestra_cc = 19
+    cobertura_pct = muestra_cc / universo_cc * 100
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.metric("Centros Comerciales analizados", f"{muestra_cc}")
+
+    with col2:
+        st.metric("Universo total", f"{universo_cc}")
+
+    with col3:
+        st.metric("Cobertura", f"{cobertura_pct:.1f}%")
+
+    representatividad_df = pd.DataFrame({
+        "Indicador": [
+            "Nivel de confianza asumido",
+            "Margen de error estimado",
+            "Muestra recomendada (±10%)",
+            "Muestra recomendada (±5%)"
+        ],
+        "Valor": [
+            "95%",
+            "±20%",
+            "54 CC",
+            "91 CC"
+        ]
+    })
+
+    st.dataframe(
+        representatividad_df,
+        use_container_width=True,
+        hide_index=True
+    )
+
+    st.info(
+        "La muestra actual cubre 19 de 119 centros comerciales "
+        f"({cobertura_pct:.1f}% del universo). "
+        "Bajo un supuesto de 95% de confianza, "
+        "el margen de error estimado es de aproximadamente ±20%, "
+        "por lo que los resultados deben interpretarse como una muestra exploratoria "
+        "y no como una representación estadística completa del universo."
+    )
 
     quality_cols = []
 
@@ -927,7 +1249,7 @@ with tab_calidad:
             )
 
             coverage_rows.append({
-                "Centro Comercial": mall_name,
+                "Centro Comercial": limpiar_nombre_cc(mall_name),
                 "Locales ocupados": locales_ocupados,
                 "Locales ocupados con recibo": locales_con_recibo,
                 "Locales ocupados sin recibo": locales_sin_recibo,
@@ -936,10 +1258,13 @@ with tab_calidad:
 
         coverage_by_mall = pd.DataFrame(coverage_rows)
 
-        st.dataframe(
-            coverage_by_mall.sort_values("Centro Comercial"),
-            use_container_width=True
-        )
+        if not coverage_by_mall.empty:
+            st.dataframe(
+                coverage_by_mall.sort_values("Centro Comercial"),
+                use_container_width=True
+            )
+        else:
+            st.info("No se encontraron centros comerciales con cobertura calculable.")
 
     else:
         st.warning(
@@ -949,11 +1274,14 @@ with tab_calidad:
     st.markdown("### Recibos sin número de servicio pero con medidor")
 
     missing_service_with_meter = parsed[
-        parsed["no_servicio"].isna() &
-        parsed["medidor"].notna()
+        parsed["no_servicio"].isna()
+        & parsed["medidor"].notna()
     ]
 
-    st.write("Recibos sin número de servicio pero con medidor:", len(missing_service_with_meter))
+    st.write(
+        "Recibos sin número de servicio pero con medidor:",
+        len(missing_service_with_meter)
+    )
 
     if not missing_service_with_meter.empty:
         st.dataframe(
@@ -982,9 +1310,15 @@ with tab_calidad:
         servicios_con_varios_medidores["cantidad_medidores"] > 1
     ].sort_values("cantidad_medidores", ascending=False)
 
-    st.write("Servicios con más de un medidor:", len(servicios_con_varios_medidores))
+    st.write(
+        "Servicios con más de un medidor:",
+        len(servicios_con_varios_medidores)
+    )
 
-    st.dataframe(servicios_con_varios_medidores, use_container_width=True)
+    st.dataframe(
+        servicios_con_varios_medidores,
+        use_container_width=True
+    )
 
     st.markdown("### Resumen por centro comercial")
 
@@ -1002,24 +1336,373 @@ with tab_calidad:
             .sort_values("Centro Comercial", ascending=True)
         )
 
-        st.dataframe(mall_quality, use_container_width=True)
+        st.dataframe(
+            mall_quality,
+            use_container_width=True
+        )
+
+    st.markdown("### Cobertura de campos del parser")
 
     if not quality_df.empty:
-        st.dataframe(quality_df, use_container_width=True)
+        st.dataframe(
+            quality_df,
+            use_container_width=True
+        )
+
         chart_df = quality_df.set_index("campo")[["cobertura_%"]]
         st.bar_chart(chart_df)
     else:
         st.info("No hay columnas suficientes para calcular cobertura de campos.")
 
 
-
-
 with tab_general:
+    st.markdown("### Distribución MT vs BT")
+
+    universo_usuarios = muestra_con_recibo.copy() if "muestra_con_recibo" in locals() else general_data.copy()
+
+    universo_usuarios["Tarifa análisis"] = (
+        universo_usuarios["TARIFA_ANALISIS"]
+        if "TARIFA_ANALISIS" in universo_usuarios.columns
+        else universo_usuarios["TARIFA"]
+    )
+
+    universo_usuarios["Nivel de tensión"] = universo_usuarios["Tarifa análisis"].apply(
+        lambda x: "MT" if str(x).upper().strip() in ["GDMTH", "GDMTO"] else (
+            "BT" if str(x).upper().strip() in ["PDBT", "GDBT"] else "Sin clasificar"
+        )
+    )
+
+    usuarios_mt_bt = (
+        universo_usuarios[
+            universo_usuarios["Nivel de tensión"].isin(["MT", "BT"])
+        ]
+        .groupby("Nivel de tensión")
+        .size()
+        .reset_index(name="Número de usuarios")
+    )
+
+    total_usuarios_mt_bt = usuarios_mt_bt["Número de usuarios"].sum()
+
+    usuarios_mt_bt["(%)"] = (
+        usuarios_mt_bt["Número de usuarios"] / total_usuarios_mt_bt * 100
+    ).round(1)
+
+    usuarios_mt_bt_display = usuarios_mt_bt.copy()
+    usuarios_mt_bt_display["(%)"] = usuarios_mt_bt_display["(%)"].map(lambda x: f"{x:.1f}%")
+
+    col_usuarios, col_demanda = st.columns(2)
+
+    with col_usuarios:
+        st.markdown("#### Usuarios por nivel de tensión")
+
+        fig_usuarios = usuarios_mt_bt.set_index("Nivel de tensión").plot.pie(
+            y="Número de usuarios",
+            autopct="%1.1f%%",
+            figsize=(4, 4),
+            legend=False
+        ).figure
+
+        st.pyplot(fig_usuarios)
+
+        st.dataframe(
+            usuarios_mt_bt_display,
+            use_container_width=True
+        )
+
+    with col_demanda:
+        st.markdown("#### Demanda real por nivel de tensión")
+
+        demanda_col = first_existing_column(
+            universo_usuarios,
+            [
+                "demanda_real_anual_kw",
+                "Demanda real kW",
+                "demanda_maxima_kw",
+                "Demanda Contratada (kW)_num",
+                "Demanda Contratada (kW)"
+            ]
+        )
+
+        if demanda_col:
+
+            universo_usuarios["Demanda real análisis kW"] = clean_number_series(
+                universo_usuarios[demanda_col]
+            )
+
+            demanda_mt_bt = (
+                universo_usuarios[
+                    universo_usuarios["Nivel de tensión"].isin(["MT", "BT"])
+                ]
+                .groupby("Nivel de tensión")["Demanda real análisis kW"]
+                .sum()
+                .reset_index(name="Demanda real total kW")
+            )
+
+            total_demanda_mt_bt = demanda_mt_bt["Demanda real total kW"].sum()
+
+            demanda_mt_bt["(%)"] = (
+                demanda_mt_bt["Demanda real total kW"] / total_demanda_mt_bt * 100
+            ).round(1)
+
+            demanda_mt_bt_display = demanda_mt_bt.copy()
+            demanda_mt_bt_display["Demanda real total kW"] = demanda_mt_bt_display[
+                "Demanda real total kW"
+            ].round(1)
+            demanda_mt_bt_display["(%)"] = demanda_mt_bt_display["(%)"].map(lambda x: f"{x:.1f}%")
+
+            fig_demanda = demanda_mt_bt.set_index("Nivel de tensión").plot.pie(
+                y="Demanda real total kW",
+                autopct="%1.1f%%",
+                figsize=(4, 4),
+                legend=False
+            ).figure
+
+            st.pyplot(fig_demanda)
+
+            st.dataframe(
+                demanda_mt_bt_display,
+                use_container_width=True
+            )
+
+            st.caption(f"Columna usada provisionalmente para demanda: `{demanda_col}`")
+
+        else:
+            st.info(
+                "Aún no encontré una columna de demanda real. "
+                "Esta gráfica se activará cuando el parser genere la demanda real anual."
+            )
+
+    # ============================================================
+    # Distribución por Clima
+    # ============================================================
+
+    st.markdown("### Distribución por clima")
+
+    climate_mapping_path = DATA_DIR / "profiles" / "cc_climate_zone_mapping.csv"
+
+    if climate_mapping_path.exists():
+
+        climate_mapping_df = pd.read_csv(
+            climate_mapping_path,
+            encoding="latin-1"
+        )
+
+        climate_mapping_df.columns = (
+            climate_mapping_df.columns
+            .str.strip()
+            .str.lower()
+        )
+
+        def clasificar_macro_clima(zona):
+            zona = str(zona).strip()
+
+            if zona in ["Hot-Humid", "Hot-Dry"]:
+                return "Cálido"
+
+            if zona in ["Mixed-Humid", "Mixed-Dry"]:
+                return "Templado"
+
+            if zona in ["Cold", "Cold / Very Cold"]:
+                return "Frío"
+
+            return "Sin clasificar"
+
+        climate_mapping_df["Macro clima"] = climate_mapping_df["zona_nrel"].apply(
+            clasificar_macro_clima
+        )
+
+        clima_dist = (
+            climate_mapping_df
+            .groupby("Macro clima")
+            .size()
+            .reset_index(name="Centros comerciales")
+        )
+
+        total_cc_clima = clima_dist["Centros comerciales"].sum()
+
+        clima_dist["(%)"] = (
+            clima_dist["Centros comerciales"] / total_cc_clima * 100
+        ).round(1)
+
+        orden_clima = {
+            "Cálido": 1,
+            "Templado": 2,
+            "Frío": 3,
+            "Sin clasificar": 4
+        }
+
+        clima_dist["_orden"] = clima_dist["Macro clima"].map(orden_clima).fillna(999)
+
+        clima_dist = clima_dist.sort_values("_orden").drop(columns=["_orden"])
+
+        # Data para barra horizontal apilada 100%
+        clima_bar = pd.DataFrame({
+            row["Macro clima"]: [row["(%)"]]
+            for _, row in clima_dist.iterrows()
+        })
+
+        fig, ax = plt.subplots(figsize=(8, 1.6))
+
+        clima_bar.plot(
+            kind="barh",
+            stacked=True,
+            ax=ax,
+            legend=True
+        )
+
+        ax.set_xlim(0, 100)
+        ax.set_xlabel("% de centros comerciales")
+        ax.set_yticks([])
+        ax.set_title("Distribución de centros comerciales por clima")
+
+        for container in ax.containers:
+            ax.bar_label(
+                container,
+                label_type="center",
+                fmt="%.1f%%",
+                fontsize=8
+            )
+
+        ax.legend(
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.35),
+            ncol=len(clima_dist)
+        )
+
+        st.pyplot(fig)
+
+        clima_dist_display = clima_dist.copy()
+        clima_dist_display["(%)"] = clima_dist_display["(%)"].map(lambda x: f"{x:.1f}%")
+
+        st.dataframe(
+            clima_dist_display,
+            use_container_width=True,
+            hide_index=True
+        )
+
+    else:
+        st.warning(
+            f"No encontré el archivo de mapeo climático: {climate_mapping_path}"
+        )
+
+    # ============================================================
+    # Distribución por tipo de centro comercial
+    # ============================================================
+
+    st.markdown("### Distribución por tipo de centro comercial")
+
+    cc_master_path = DATA_DIR / "profiles" / "cc_master_data.csv"
+
+    if cc_master_path.exists():
+
+        cc_master_df = pd.read_csv(cc_master_path)
+
+        cc_master_df.columns = (
+            cc_master_df.columns
+            .str.strip()
+        )
+
+        tipo_cc_col = "Tipo de Mall"
+
+        if tipo_cc_col in cc_master_df.columns:
+
+            tipo_cc_dist = (
+                cc_master_df
+                .groupby(tipo_cc_col)
+                .size()
+                .reset_index(name="Centros comerciales")
+                .rename(columns={tipo_cc_col: "Tipo de centro comercial"})
+            )
+
+            total_tipo_cc = tipo_cc_dist["Centros comerciales"].sum()
+
+            tipo_cc_dist["(%)"] = (
+                tipo_cc_dist["Centros comerciales"] / total_tipo_cc * 100
+            ).round(1)
+
+            tipo_cc_dist = tipo_cc_dist.sort_values(
+                "(%)",
+                ascending=False
+            )
+
+            orden_tipo_cc = {
+                "Luxury Fashion Mall": 1,
+                "Fashion Mall": 2,
+                "Regional Mall": 3,
+                "Power Center": 4,
+                "Strip Mall": 5
+            }
+
+            tipo_cc_dist["_orden"] = (
+                tipo_cc_dist["Tipo de centro comercial"]
+                .map(orden_tipo_cc)
+                .fillna(999)
+            )
+
+            tipo_cc_dist = (
+                tipo_cc_dist
+                .sort_values("_orden")
+                .drop(columns=["_orden"])
+            )
+
+            tipo_cc_bar = pd.DataFrame({
+                row["Tipo de centro comercial"]: [row["(%)"]]
+                for _, row in tipo_cc_dist.iterrows()
+            })
+
+            fig, ax = plt.subplots(figsize=(8, 1.6))
+
+            tipo_cc_bar.plot(
+                kind="barh",
+                stacked=True,
+                ax=ax,
+                legend=True
+            )
+
+            ax.set_xlim(0, 100)
+            ax.set_xlabel("% de centros comerciales")
+            ax.set_yticks([])
+            ax.set_title(
+                "Distribución de centros comerciales por tipo",
+                fontsize=12
+            )
+
+            for container in ax.containers:
+                ax.bar_label(
+                    container,
+                    label_type="center",
+                    fmt="%.1f%%",
+                    fontsize=8
+                )
+
+            ax.legend(
+                loc="upper center",
+                bbox_to_anchor=(0.5, -0.25),
+                ncol=4,
+                fontsize=8,
+                frameon=False
+            )
+
+            st.pyplot(fig)
+
+            tipo_cc_display = tipo_cc_dist.copy()
+            tipo_cc_display["(%)"] = tipo_cc_display["(%)"].map(lambda x: f"{x:.1f}%")
+
+            st.dataframe(
+                tipo_cc_display,
+                use_container_width=True,
+                hide_index=True
+            )
+
+        else:
+            st.warning("No encontré la columna 'Tipo de Mall' en cc_master_data.csv.")
+
+    else:
+        st.warning(f"No encontré el archivo maestro de centros comerciales: {cc_master_path}")
+
     # ============================================================
     # Consumption and billing distribution
     # ============================================================
-
-
 
     st.markdown('<div class="section-title">3. Distribución de consumo y facturación</div>', unsafe_allow_html=True)
 
@@ -1531,12 +2214,27 @@ with tab_cc:
 
     if mall_col:
 
-        selected_cc = st.selectbox(
-            "Selecciona un centro comercial",
-            options=sorted(filtered[mall_col].dropna().unique())
+        mall_options = sorted(
+            filtered[mall_col]
+            .dropna()
+            .unique()
         )
 
-        cc_parser = filtered[filtered[mall_col] == selected_cc].copy()
+        mall_map = {
+            limpiar_nombre_cc(x): x
+            for x in mall_options
+        }
+
+        selected_cc_display = st.selectbox(
+            "Selecciona un centro comercial",
+            options=sorted(mall_map.keys())
+        )
+
+        selected_cc = mall_map[selected_cc_display]
+
+        cc_parser = filtered[
+            filtered[mall_col] == selected_cc
+        ].copy()
 
         general_mall_col = first_existing_column(
             general_data,
@@ -2678,6 +3376,416 @@ with tab_cc:
     else:
         st.warning("No encontré columna de centro comercial.")
 
+with tab_sg:
+
+    st.markdown(
+        '<div class="section-title">Servicios Generales</div>',
+        unsafe_allow_html=True
+    )
+
+    cc_master_path = DATA_DIR / "profiles" / "cc_master_data.csv"
+
+    if not cc_master_path.exists():
+        st.warning(f"No encontré el archivo maestro: {cc_master_path}")
+
+    else:
+        cc_master_df = pd.read_csv(cc_master_path, encoding="latin1")
+        cc_master_df.columns = cc_master_df.columns.str.strip()
+
+        parsed_sg = parsed.copy()
+
+        # ------------------------------------------------------------
+        # Columnas base
+        # ------------------------------------------------------------
+
+        cc_col = first_existing_column(
+            parsed_sg,
+            ["mall_folder", "centro_comercial", "NOMBRE DEL CC", "Centro Comercial"]
+        )
+
+        cliente_col = first_existing_column(
+            parsed_sg,
+            ["cliente_nombre", "CLIENTE", "cliente"]
+        )
+
+        subgroup_col = first_existing_column(
+            parsed_sg,
+            ["recibos_subgroup", "NOMBRE COMERCIAL", "nombre_comercial"]
+        )
+
+        medidor_col = first_existing_column(
+            parsed_sg,
+            ["medidor", "MEDIDOR", "No. De medidor", "No de medidor"]
+        )
+
+        servicio_col = first_existing_column(
+            parsed_sg,
+            ["no_servicio", "servicio", "No. Servicio"]
+        )
+
+        consumo_col = first_existing_column(
+            parsed_sg,
+            ["kwh_total", "consumo_kwh", "Consumo anual (kWh)"]
+        )
+
+        demanda_contratada_col = first_existing_column(
+            parsed_sg,
+            [
+                "demanda_contratada_kw",
+                "Demanda Contratada (kW)",
+                "Demanda Contratada (kW)_num"
+            ]
+        )
+
+        demanda_real_col = first_existing_column(
+            parsed_sg,
+            [
+                "demanda_real_kw",
+                "demanda_real_anual_kw",
+                "demanda_maxima_kw",
+                "Demanda real (kW)",
+                "Demanda real kW"
+            ]
+        )
+
+        # ------------------------------------------------------------
+        # Identificar Servicios Generales
+        # ------------------------------------------------------------
+
+        search_cols = [
+            col for col in [cliente_col, subgroup_col]
+            if col is not None
+        ]
+
+        if not search_cols or cc_col is None:
+            st.warning(
+                "No encontré columnas suficientes para identificar Servicios Generales."
+            )
+
+        else:
+            sg_mask = False
+
+            for col in search_cols:
+                sg_mask = sg_mask | (
+                    parsed_sg[col]
+                    .astype(str)
+                    .str.upper()
+                    .str.contains(
+                        "SERVICIOS GENERALES|PARKS|MANTENIMIENTO|AREAS COMUNES|ÁREAS COMUNES|ADMINISTRACION|ADMINISTRACIÓN",
+                        na=False,
+                        regex=True
+                    )
+                )
+
+            sg_df = parsed_sg[sg_mask].copy()
+
+            if sg_df.empty:
+                st.info(
+                    "No encontré registros asociados a Servicios Generales en el parser."
+                )
+
+            else:
+
+                # ------------------------------------------------------------
+                # Normalizar columnas numéricas
+                # ------------------------------------------------------------
+
+                if consumo_col:
+                    sg_df["_consumo_kwh"] = clean_number_series(sg_df[consumo_col])
+                else:
+                    sg_df["_consumo_kwh"] = np.nan
+
+                if demanda_contratada_col:
+                    sg_df["_demanda_contratada_kw"] = clean_number_series(
+                        sg_df[demanda_contratada_col]
+                    )
+                else:
+                    sg_df["_demanda_contratada_kw"] = np.nan
+
+                if demanda_real_col:
+                    sg_df["_demanda_real_kw"] = clean_number_series(
+                        sg_df[demanda_real_col]
+                    )
+                else:
+                    sg_df["_demanda_real_kw"] = np.nan
+
+                # ------------------------------------------------------------
+                # Tabla resumen por centro comercial
+                # ------------------------------------------------------------
+
+                rows = []
+
+                for _, mall in cc_master_df.iterrows():
+
+                    nombre_cc = limpiar_nombre_cc(mall.get("Nombre Comercial", ""))
+                    tipo_cc = mall.get("Tipo de Mall", "")
+                    zona_nrel = mall.get("zona_nrel", mall.get("Zona NREL", ""))
+
+                    zona_upper = str(zona_nrel).upper()
+
+                    if "HOT" in zona_upper:
+                        clima = "Cálido"
+                    elif "MIXED" in zona_upper:
+                        clima = "Templado"
+                    elif "COLD" in zona_upper:
+                        clima = "Frío"
+                    else:
+                        clima = "Sin clasificar"
+
+                    abr = mall.get("Área Bruta Rentable (m²)", np.nan)
+                    abr = pd.to_numeric(
+                        str(abr).replace(",", ""),
+                        errors="coerce"
+                    )
+
+                    nombre_cc_key = normalizar_texto_simple(nombre_cc)
+
+                    cc_sg = sg_df[
+                        sg_df[cc_col]
+                        .astype(str)
+                        .apply(
+                            lambda x: (
+                                nombre_cc_key in normalizar_texto_simple(x)
+                                or normalizar_texto_simple(x) in nombre_cc_key
+                            )
+                        )
+                    ].copy()
+
+                
+                    if cc_sg.empty:
+                        continue
+
+                    medidores_sg = (
+                        cc_sg[medidor_col].nunique()
+                        if medidor_col
+                        else len(cc_sg)
+                    )
+
+                    demanda_contratada = cc_sg["_demanda_contratada_kw"].sum()
+                    demanda_real = cc_sg["_demanda_real_kw"].sum()
+                    consumo_anual = cc_sg["_consumo_kwh"].sum()
+
+                    factor_carga = np.nan
+
+                    if pd.notna(demanda_real) and demanda_real > 0:
+                        factor_carga = consumo_anual / (demanda_real * 8760)
+
+                    densidad_demanda = np.nan
+                    densidad_consumo = np.nan
+
+                    if pd.notna(abr) and abr > 0:
+                        densidad_demanda = demanda_real / abr
+                        densidad_consumo = consumo_anual / abr
+
+                    rows.append({
+                        "Centro Comercial": nombre_cc,
+                        "Tipo de CC": tipo_cc,
+                        "Clima": clima,
+                        "Medidores SG": medidores_sg,
+                        "Demanda contratada (kW)": demanda_contratada,
+                        "Demanda real (kW)": demanda_real,
+                        "Factor de carga": factor_carga,
+                        "Densidad demanda (kW/m² ABR)": densidad_demanda,
+                        "Consumo anual (kWh)": consumo_anual,
+                        "Densidad consumo (kWh/m² ABR)": densidad_consumo
+                    })
+
+                sg_resumen_df = pd.DataFrame(rows)
+
+                if sg_resumen_df.empty:
+                    st.info(
+                        "No se pudo construir la tabla resumen de Servicios Generales."
+                    )
+
+                else:
+                    sg_resumen_display = sg_resumen_df.copy()
+
+                    for col in [
+                        "Demanda contratada (kW)",
+                        "Demanda real (kW)",
+                        "Densidad demanda (kW/m² ABR)",
+                        "Consumo anual (kWh)",
+                        "Densidad consumo (kWh/m² ABR)"
+                    ]:
+                        sg_resumen_display[col] = sg_resumen_display[col].round(2)
+
+                    sg_resumen_display["Factor de carga"] = (
+                        sg_resumen_display["Factor de carga"] * 100
+                    ).round(1).map(lambda x: f"{x}%" if pd.notna(x) else "")
+
+                    # Orden climático
+                    orden_clima = {
+                        "Cálido": 1,
+                        "Templado": 2,
+                        "Frío": 3
+                    }
+
+                    # Orden de tipo de mall
+                    orden_tipo_cc = {
+                        "Luxury Fashion Mall": 1,
+                        "Fashion Mall": 2,
+                        "Regional Mall": 3,
+                        "Power Center": 4,
+                        "Strip Mall": 5
+                    }
+
+                    sg_resumen_display["_orden_clima"] = (
+                        sg_resumen_display["Clima"]
+                        .map(orden_clima)
+                    )
+
+                    sg_resumen_display["_orden_tipo"] = (
+                        sg_resumen_display["Tipo de CC"]
+                        .map(orden_tipo_cc)
+                    )
+
+                    sg_resumen_display = (
+                        sg_resumen_display
+                        .sort_values(
+                            [
+                                "_orden_clima",
+                                "_orden_tipo",
+                                "Densidad demanda (kW/m² ABR)",
+                                "Centro Comercial"
+                            ],
+                            ascending=[
+                                True,   # clima
+                                True,   # tipo de CC
+                                False,  # mayor densidad primero
+                                True    # nombre
+                            ]
+                        )
+                        .drop(
+                            columns=[
+                                "_orden_clima",
+                                "_orden_tipo"
+                            ]
+                        )
+                    )
+
+                    st.dataframe(
+                        sg_resumen_display,
+                        use_container_width=True,
+                        hide_index=True
+                    )
+
+                    st.caption(
+                        """
+**Nota:** Las densidades de demanda y consumo de Servicios Generales se calculan utilizando el Área Bruta Rentable (ABR) del centro comercial como variable de normalización. Aunque los servicios generales suministran principalmente áreas comunes, estacionamientos, pasillos, vestíbulos, elevadores y otros espacios no rentables, dichos servicios son indispensables para la operación y comercialización de las áreas rentables. Por esta razón, el ABR se considera una referencia adecuada para comparar la intensidad energética de Servicios Generales entre distintos centros comerciales.
+"""
+                    )
+
+                # ------------------------------------------------------------
+                # Gráfica de densidad de demanda por medidor
+                # ------------------------------------------------------------
+
+                st.markdown(
+                    "### Densidad de demanda de Servicios Generales por medidor"
+                )
+
+                plot_rows = []
+
+                for _, row in sg_df.iterrows():
+
+                    centro = row.get(cc_col, "")
+                    medidor = row.get(medidor_col, "") if medidor_col else ""
+
+                    demanda_real = row.get("_demanda_real_kw", np.nan)
+
+                    mall_match = cc_master_df[
+                        cc_master_df["Nombre Comercial"]
+                        .astype(str)
+                        .str.upper()
+                        .apply(
+                            lambda x: x in str(centro).upper()
+                            or str(centro).upper() in x
+                        )
+                    ]
+
+                    if mall_match.empty:
+                        continue
+
+                    abr = mall_match.iloc[0].get("Área Bruta Rentable (m²)", np.nan)
+                    abr = pd.to_numeric(
+                        str(abr).replace(",", ""),
+                        errors="coerce"
+                    )
+
+                    if pd.isna(demanda_real) or pd.isna(abr) or abr <= 0:
+                        continue
+
+                    densidad_w_m2 = demanda_real / abr * 1000
+
+                    plot_rows.append({
+                        "Etiqueta": f"{centro} ({medidor})",
+                        "Centro Comercial": centro,
+                        "Medidor": medidor,
+                        "Densidad demanda (W/m² ABR)": densidad_w_m2
+                    })
+
+                sg_plot_df = pd.DataFrame(plot_rows)
+
+                if sg_plot_df.empty:
+                    st.info(
+                        "No hay información suficiente para graficar densidad de demanda por medidor."
+                    )
+
+                else:
+                    promedio = sg_plot_df["Densidad demanda (W/m² ABR)"].mean()
+                    desv = sg_plot_df["Densidad demanda (W/m² ABR)"].std()
+
+                    sg_plot_df = sg_plot_df.sort_values(
+                        "Densidad demanda (W/m² ABR)",
+                        ascending=False
+                    ).reset_index(drop=True)
+
+                    fig, ax = plt.subplots(figsize=(14, 5))
+
+                    ax.scatter(
+                        sg_plot_df["Etiqueta"],
+                        sg_plot_df["Densidad demanda (W/m² ABR)"],
+                        label="Densidad de demanda"
+                    )
+
+                    ax.axhline(
+                        promedio,
+                        label="Promedio"
+                    )
+
+                    ax.axhline(
+                        promedio + desv,
+                        label="+1 desv est"
+                    )
+
+                    ax.axhline(
+                        max(promedio - desv, 0),
+                        label="-1 desv est"
+                    )
+
+                    ax.set_ylabel("Densidad de demanda (W/m² ABR)")
+                    ax.set_xlabel("Centro comercial (medidor)")
+                    ax.set_title(
+                        "Densidad de demanda de Servicios Generales"
+                    )
+
+                    ax.tick_params(
+                        axis="x",
+                        rotation=60,
+                        labelsize=8
+                    )
+
+                    ax.legend(
+                        loc="upper center",
+                        bbox_to_anchor=(0.5, -0.35),
+                        ncol=4,
+                        fontsize=8
+                    )
+
+                    ax.grid(True, axis="y", alpha=0.3)
+
+                    st.pyplot(fig)
+
+
 
 with tab_anexo:
 
@@ -2706,49 +3814,357 @@ with tab_anexo:
 
     st.dataframe(metodologia_df, use_container_width=True)
 
-    st.markdown("### Perfil horario comercial genérico para PDBT")
+    st.markdown("### Asignación de perfiles por giro comercial")
 
-    perfil_df = pd.DataFrame({
-        "Hora": list(range(24)),
-        "Peso relativo": [
-            0.01, 0.01, 0.01, 0.01,
-            0.02, 0.03, 0.04, 0.06,
-            0.08, 0.10, 0.12, 0.13,
-            0.13, 0.13, 0.12, 0.11,
-            0.10, 0.09, 0.07, 0.05,
-            0.03, 0.02, 0.01, 0.01
+    perfil_mapping_df = pd.DataFrame({
+        "Giro comercial": [
+            "Alimentos y Bebidas",
+            "Alimentos y Bebidas",
+            "Tiendas Departamentales",
+            "Moda",
+            "Tecnología / Electrónicos",
+            "Wellness",
+            "Servicios Generales",
+            "Bienes de Consumo",
+            "Entretenimiento",
+            "Otros"
+        ],
+        "Tipo de local": [
+            "Food Court",
+            "Cualquier otro",
+            "Cualquiera",
+            "Cualquiera",
+            "Cualquiera",
+            "Cualquiera",
+            "Cualquiera",
+            "Cualquiera",
+            "Cualquiera",
+            "Cualquiera"
+        ],
+        "Perfil NREL": [
+            "Quick Service Restaurant",
+            "Full Service Restaurant",
+            "Retail Standalone",
+            "Retail Strip Mall",
+            "Retail Strip Mall",
+            "Retail Strip Mall",
+            "Retail Strip Mall",
+            "Retail Strip Mall",
+            "Retail Strip Mall",
+            "Retail Strip Mall"
         ]
     })
 
-    perfil_df["Peso normalizado"] = (
-        perfil_df["Peso relativo"] / perfil_df["Peso relativo"].sum()
+    st.dataframe(
+        perfil_mapping_df,
+        use_container_width=True
     )
 
-    st.dataframe(perfil_df, use_container_width=True)
 
-    fig, ax = plt.subplots(figsize=(10, 4))
+    st.markdown("""
+    ### Uso mensual de perfiles NREL
 
-    ax.plot(
-        perfil_df["Hora"],
-        perfil_df["Peso normalizado"]
+    La estimación de demanda para usuarios PDBT utilizará perfiles horarios
+    de NREL/DOE diferenciados por:
+
+    - Zona climática
+    - Giro""")
+
+    st.markdown("### Perfil horario NREL utilizado para estimación PDBT")
+
+    zona_nrel = st.selectbox(
+        "Zona climática",
+        [
+            "Cálido húmedo (Hot-Humid)",
+            "Templado seco (Mixed-Dry)",
+            "Templado húmedo (Mixed-Humid)",
+            "Cálido seco (Hot-Dry)",
+            "Frío (Cold)"
+        ],
+        key="zona_nrel_anexo"
     )
 
-    ax.set_xlabel("Hora del día")
-    ax.set_ylabel("Peso normalizado")
-    ax.set_title("Perfil horario comercial genérico para estimación PDBT")
+    tipo_perfil = st.selectbox(
+        "Tipo de perfil",
+        [
+            "Local comercial (Retail Strip Mall)",
+            "Tienda departamental (Retail Standalone)",
+            "Restaurante de comida rápida (Quick Service Restaurant)",
+            "Restaurante de servicio completo (Full Service Restaurant)"
+        ],
+        key="tipo_perfil_anexo"
+    )
 
-    st.pyplot(fig)
+    zona_file_map = {
+        "Cálido húmedo (Hot-Humid)": "hot-humid",
+        "Templado seco (Mixed-Dry)": "mixed-dry",
+        "Templado húmedo (Mixed-Humid)": "mixed-humid",
+        "Cálido seco (Hot-Dry)": "hot-dry",
+        "Frío (Cold)": "cold"
+    }
+
+    perfil_file_map = {
+        "Local comercial (Retail Strip Mall)": "retailstripmall",
+        "Tienda departamental (Retail Standalone)": "retailstandalone",
+        "Restaurante de comida rápida (Quick Service Restaurant)": "quickservicerestaurant",
+        "Restaurante de servicio completo (Full Service Restaurant)": "fullservicerestaurant"
+    }
+
+    perfil_filename = (
+        f"up0-"
+        f"{zona_file_map[zona_nrel]}-"
+        f"{perfil_file_map[tipo_perfil]}.csv"
+    )
+
+    perfil_path = (
+        DATA_DIR
+        / "profiles"
+        / perfil_filename
+    )
+
+    st.caption(f"Archivo seleccionado: `{perfil_filename}`")
+
+
+    if perfil_path.exists():
+
+        perfil_df = construir_perfil_mensual_nrel(
+            perfil_path
+        )
+
+        meses_map = {
+            "Enero": 1,
+            "Febrero": 2,
+            "Marzo": 3,
+            "Abril": 4,
+            "Mayo": 5,
+            "Junio": 6,
+            "Julio": 7,
+            "Agosto": 8,
+            "Septiembre": 9,
+            "Octubre": 10,
+            "Noviembre": 11,
+            "Diciembre": 12
+        }
+
+        selected_mes_label = st.selectbox(
+            "Selecciona mes",
+            options=list(meses_map.keys()),
+            key="mes_perfil_nrel"
+        )
+
+        selected_mes = meses_map[selected_mes_label]
+
+        perfil_mes = perfil_df[
+            perfil_df["mes"] == selected_mes
+        ].copy()
+
+        st.dataframe(
+            perfil_mes,
+            use_container_width=True
+        )
+
+        fig, ax = plt.subplots(
+            figsize=(10, 4)
+        )
+
+        ax.plot(
+            perfil_mes["hora"],
+            perfil_mes["peso_normalizado"]
+        )
+
+        ax.set_xlabel("Hora del día")
+        ax.set_ylabel("Peso normalizado")
+
+        ax.set_title(
+            f"Perfil NREL - {selected_mes_label}"
+        )
+
+        st.pyplot(fig)
+
+    else:
+
+        st.warning(
+            f"No encontré el archivo: {perfil_path}"
+        )
+  
+    st.write(
+        "Carga máxima relativa:",
+        perfil_mes["peso_normalizado"].max()
+    )
+
+    st.info(
+        "Este valor representa la hora pico de un día promedio del mes. "
+        "Para estimar demanda PDBT se usará: "
+        "(kWh mensual / días del mes) × carga máxima relativa."
+    )
+
+    st.markdown("### Mapeo de centros comerciales a zona climática NREL")
+
+    climate_mapping_path = DATA_DIR / "profiles" / "cc_master_data.csv"
+
+    if climate_mapping_path.exists():
+        climate_mapping_df = pd.read_csv(climate_mapping_path)
+
+        st.dataframe(
+            climate_mapping_df,
+            use_container_width=True
+        )
+    else:
+        st.warning(
+            f"No encontré el archivo de mapeo climático: {climate_mapping_path}"
+        )
+
+    st.markdown("### Archivos de perfiles NREL disponibles")
+
+    profiles_dir = DATA_DIR / "profiles"
+
+    expected_profiles = []
+
+    zonas_file = {
+        "hot-humid": "Cálido húmedo (Hot-Humid)",
+        "mixed-dry": "Templado seco (Mixed-Dry)",
+        "mixed-humid": "Templado húmedo (Mixed-Humid)",
+        "hot-dry": "Cálido seco (Hot-Dry)",
+        "cold": "Frío (Cold)"
+    }
+
+    tipos_file = {
+        "retailstripmall": "Local comercial (Retail Strip Mall)",
+        "retailstandalone": "Tienda departamental (Retail Standalone)",
+        "quickservicerestaurant": "Comida rápida (Quick Service Restaurant)",
+        "fullservicerestaurant": "Restaurante (Full Service Restaurant)"
+    }
+
+    for zona_code, zona_nombre in zonas_file.items():
+
+        for tipo_code, tipo_nombre in tipos_file.items():
+
+            filename = f"up0-{zona_code}-{tipo_code}.csv"
+
+            expected_profiles.append({
+                "Zona climática": zona_nombre,
+                "Tipo de perfil": tipo_nombre,
+                "Disponible": "Sí" if (profiles_dir / filename).exists() else "No"
+            })
+
+    expected_profiles_df = pd.DataFrame(expected_profiles)
+
+    expected_profiles_df = (
+        expected_profiles_df
+        .sort_values(
+            ["Zona climática", "Tipo de perfil"]
+        )
+        .reset_index(drop=True)
+    )
+
+    st.dataframe(
+        expected_profiles_df,
+        use_container_width=True
+    )
+
+    st.markdown("### Vista preliminar de asignación de perfiles por local")
+
+    climate_mapping_path = DATA_DIR / "profiles" / "cc_climate_zone_mapping.csv"
+
+    if climate_mapping_path.exists() and "muestra_con_recibo" in locals():
+
+        climate_mapping_df = pd.read_csv(
+            climate_mapping_path,
+            encoding="latin-1"
+        )
+
+        demanda_template_df = crear_demanda_real_anual_template(
+            muestra_con_recibo,
+            climate_mapping_df
+        )
+
+        st.dataframe(
+            demanda_template_df[
+                [
+                    "centro_comercial",
+                    "nombre_comercial",
+                    "subgiro_comercial",
+                    "tipo_local",
+                    "tarifa",
+                    "zona_nrel",
+                    "perfil_nrel_nombre",
+                    "demanda_real_anual_kw",
+                    "criterio_demanda"
+                ]
+            ],
+            use_container_width=True
+        )
+
+    else:
+        st.info(
+            "La vista preliminar de asignación de perfiles se mostrará cuando exista muestra con recibo y el archivo de zonas climáticas."
+        )
+
+    st.markdown("### Verificación de archivos NREL requeridos")
+
+    profiles_dir = DATA_DIR / "profiles"
+
+    zonas_requeridas = {
+        "hot-humid": "Cálido húmedo (Hot-Humid)",
+        "mixed-dry": "Templado seco (Mixed-Dry)",
+        "mixed-humid": "Templado húmedo (Mixed-Humid)",
+        "hot-dry": "Cálido seco (Hot-Dry)",
+        "cold": "Frío (Cold)"
+    }
+
+    tipos_requeridos = {
+        "retailstripmall": "Local comercial (Retail Strip Mall)",
+        "retailstandalone": "Tienda departamental (Retail Standalone)",
+        "quickservicerestaurant": "Comida rápida (Quick Service Restaurant)",
+        "fullservicerestaurant": "Restaurante (Full Service Restaurant)"
+    }
+
+    verificacion_rows = []
+
+    for zona_code, zona_nombre in zonas_requeridas.items():
+        for tipo_code, tipo_nombre in tipos_requeridos.items():
+
+            filename = f"up0-{zona_code}-{tipo_code}.csv"
+            file_path = profiles_dir / filename
+
+            verificacion_rows.append({
+                "Zona climática": zona_nombre,
+                "Tipo de perfil": tipo_nombre,
+                "Archivo": filename,
+                "Disponible": "Sí" if file_path.exists() else "No"
+            })
+
+    verificacion_df = pd.DataFrame(verificacion_rows)
+
+    st.dataframe(
+        verificacion_df,
+        use_container_width=True
+    )
+
+    faltantes_df = verificacion_df[
+        verificacion_df["Disponible"] == "No"
+    ]
+
+    if faltantes_df.empty:
+        st.success("Todos los archivos NREL requeridos están disponibles.")
+    else:
+        st.warning("Faltan archivos NREL requeridos.")
+        st.dataframe(
+            faltantes_df,
+            use_container_width=True
+        )
 
     st.markdown("### Referencias")
 
     st.markdown("""
-**NREL / DOE End-Use Load Profiles for the U.S. Building Stock**  
+**Fuente base del perfil:**  
+NREL / DOE — End-Use Load Profiles for the U.S. Building Stock.  
+Dataset público de perfiles de carga a resolución de 15 minutos para edificios comerciales y residenciales, desarrollado con modelos ResStock/ComStock calibrados con datos medidos.
+
+**Referencia:**  
 https://data.openei.org/submissions/4520
 
-**DOE Commercial Prototype Building Models**  
-https://www.energycodes.gov/prototype-building-models
-
-**Nota:** el perfil mostrado es temporal para probar la estructura del dashboard. 
-Después debe sustituirse por el perfil horario real descargado de NREL/DOE.
+**Nota metodológica:**  
+El archivo `perfil_pdbt_retail_nrel.csv` se usa como perfil horario comercial normalizado para estimar demanda máxima en usuarios PDBT. En esta versión puede contener un perfil temporal; cuando se sustituya por un perfil descargado de NREL/DOE, el código no necesita cambiar.
 """)
 
