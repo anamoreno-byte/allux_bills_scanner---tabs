@@ -2168,11 +2168,14 @@ def format_mxn_per_kwh(x):
     return f"${x:,.2f}"
 
 NOTA_DEMANDA_PROMEDIO_ANUAL = (
-    "Nota: Demanda máxima anual (kW) = máxima demanda mensual registrada o estimada "
-    "dentro de la ventana anual disponible para cada servicio/local. "
+    "Nota: Demanda promedio anual (kW) = promedio de las demandas máximas "
+    "de los recibos más recientes disponibles para cada servicio/local. "
+    "Si el servicio tiene recibos bimestrales, se usan hasta 6 recibos; "
+    "si tiene recibos mensuales, se usan hasta 12 recibos. "
+    "Cuando no existe información de un año completo, el promedio se calcula "
+    "con los recibos disponibles. "
     "Para GDMTH, GDMTO y GDBT se toma el kwmax del parser; "
-    "para PDBT se usa la demanda estimada con perfiles NREL cuando existe información suficiente. "
-    "La Demanda promedio anual (kW) se conserva solo como referencia."
+    "para PDBT se usa la demanda estimada con perfiles NREL cuando existe información suficiente."
 )
 
 def mostrar_pie_composicion_fijo(
@@ -3243,10 +3246,10 @@ def aplicar_estimacion_pdbt_nrel_a_parsed(
 @st.cache_data(show_spinner=False)
 def calcular_demanda_promedio_ultimos_12_meses(parsed: pd.DataFrame) -> pd.DataFrame:
     """
-    Calcula la Demanda máxima anual (kW) por servicio/local.
+    Calcula la Demanda promedio anual (kW) por servicio/local.
 
     Definición estándar de la app:
-    Demanda máxima anual (kW) =
+    Demanda promedio anual (kW) =
     promedio de las demandas máximas de los recibos más recientes disponibles.
 
     Regla:
@@ -3372,7 +3375,7 @@ def calcular_demanda_promedio_ultimos_12_meses(parsed: pd.DataFrame) -> pd.DataF
         return 1
 
     # --------------------------------------------------
-    # Calcular demanda máxima anual por grupo
+    # Calcular demanda promedio anual por grupo
     # --------------------------------------------------
 
     rows = []
@@ -6373,7 +6376,7 @@ def crear_demanda_real_anual_template(muestra_con_recibo, climate_mapping_df):
 
 def enriquecer_muestra_con_demanda(muestra_con_recibo: pd.DataFrame, parsed: pd.DataFrame) -> pd.DataFrame:
     """
-    Toma la muestra validada de Calidad de Datos y le agrega la demanda máxima anual
+    Toma la muestra validada de Calidad de Datos y le agrega la demanda promedio anual
     calculada desde el parser.
 
     Importante:
@@ -7045,7 +7048,7 @@ def enriquecer_muestra_con_demanda(muestra_con_recibo: pd.DataFrame, parsed: pd.
     df["criterio_union_demanda"] = pd.NA
 
     df.loc[
-        df["demanda_maxima_anual_kw"].notna(),
+        df["demanda_promedio_anual_kw"].notna(),
         "criterio_union_demanda"
     ] = "Medidor"
 
@@ -7440,7 +7443,7 @@ def enriquecer_muestra_con_demanda(muestra_con_recibo: pd.DataFrame, parsed: pd.
     # 2) Fallback por cliente
     # --------------------------------------------------
 
-    faltantes = df["demanda_maxima_anual_kw"].isna()
+    faltantes = df["demanda_promedio_anual_kw"].isna()
 
     if faltantes.any():
         lookup_cliente = demanda_lookup[
@@ -7501,7 +7504,7 @@ def enriquecer_muestra_con_demanda(muestra_con_recibo: pd.DataFrame, parsed: pd.
                 df.loc[faltantes, col] = temp[col_cliente].values
 
         df.loc[
-            faltantes & df["demanda_maxima_anual_kw"].notna(),
+            faltantes & df["demanda_promedio_anual_kw"].notna(),
             "criterio_union_demanda"
         ] = "Cliente"
 
@@ -7509,7 +7512,7 @@ def enriquecer_muestra_con_demanda(muestra_con_recibo: pd.DataFrame, parsed: pd.
     # 3) Fallback por nombre comercial
     # --------------------------------------------------
 
-    faltantes = df["demanda_maxima_anual_kw"].isna()
+    faltantes = df["demanda_promedio_anual_kw"].isna()
 
     if faltantes.any():
         lookup_nombre = demanda_lookup[
@@ -7571,7 +7574,7 @@ def enriquecer_muestra_con_demanda(muestra_con_recibo: pd.DataFrame, parsed: pd.
                 df.loc[faltantes, col] = temp[col_nombre].values
 
         df.loc[
-            faltantes & df["demanda_maxima_anual_kw"].notna(),
+            faltantes & df["demanda_promedio_anual_kw"].notna(),
             "criterio_union_demanda"
         ] = "Nombre comercial"
 
@@ -8090,24 +8093,15 @@ def construir_base_densidad_demanda(
         )
 
     # --------------------------------------------------------
-    # Demanda máxima anual
+    # Demanda promedio anual
     # --------------------------------------------------------
-    # Concepto estándar de esta versión de prueba:
-    # Demanda máxima anual (kW) = máxima demanda mensual registrada/estimada
-    # dentro de la ventana anual disponible.
+    # Concepto estándar de toda la app:
+    # promedio de las demandas máximas de los recibos más recientes disponibles.
     #
-    # Para GDMTH/GDMTO/GDBT viene del kwmax del parser.
-    # Para PDBT viene de la estimación con perfiles NREL cuando exista perfil.
+    # Si los recibos son bimestrales, se usan hasta 6.
+    # Si los recibos son mensuales, se usan hasta 12.
+    # Si hay menos recibos disponibles, se promedia con los existentes.
 
-    if "demanda_maxima_anual_kw" in df.columns:
-        df["Demanda máxima anual (kW)"] = pd.to_numeric(
-            df["demanda_maxima_anual_kw"],
-            errors="coerce"
-        )
-    else:
-        df["Demanda máxima anual (kW)"] = pd.NA
-
-    # Conservamos el promedio como referencia/auditoría.
     if "demanda_promedio_anual_kw" in df.columns:
         df["Demanda promedio anual (kW)"] = pd.to_numeric(
             df["demanda_promedio_anual_kw"],
@@ -8116,17 +8110,27 @@ def construir_base_densidad_demanda(
     else:
         df["Demanda promedio anual (kW)"] = pd.NA
 
+    # Conservamos esta columna solo como respaldo/auditoría si existe,
+    # pero ya no será la métrica principal de la app.
+    if "demanda_maxima_anual_kw" in df.columns:
+        df["Demanda máxima anual (kW)"] = pd.to_numeric(
+            df["demanda_maxima_anual_kw"],
+            errors="coerce"
+        )
+    else:
+        df["Demanda máxima anual (kW)"] = pd.NA
+
     # --------------------------------------------------------
     # Densidad de demanda
     # --------------------------------------------------------
     # Se reporta en W/m².
     # Fórmula:
-    # Demanda máxima anual (kW) / Área m² × 1,000
+    # Demanda promedio anual (kW) / Área m² × 1,000
 
     df["Densidad de demanda W/m2"] = pd.NA
 
     mask_densidad = (
-        df["Demanda máxima anual (kW)"].notna()
+        df["Demanda promedio anual (kW)"].notna()
         & df["Area m2"].notna()
         & (df["Area m2"] > 0)
     )
@@ -8137,7 +8141,7 @@ def construir_base_densidad_demanda(
     ] = (
         df.loc[
             mask_densidad,
-            "Demanda máxima anual (kW)"
+            "Demanda promedio anual (kW)"
         ]
         / df.loc[
             mask_densidad,
@@ -8162,25 +8166,25 @@ def construir_base_densidad_demanda(
     df["estatus_demanda"] = "Pendiente"
 
     df.loc[
-        df["Demanda máxima anual (kW)"].notna(),
+        df["Demanda promedio anual (kW)"].notna(),
         "estatus_demanda"
     ] = "Calculada"
 
     df.loc[
         df["Tarifa"].isin(["GDMTH", "GDMTO", "GDBT"])
-        & df["Demanda máxima anual (kW)"].notna(),
+        & df["Demanda promedio anual (kW)"].notna(),
         "estatus_demanda"
     ] = "Calculada con kwmax"
 
     df.loc[
         df["Tarifa"].eq("PDBT")
-        & df["Demanda máxima anual (kW)"].notna(),
+        & df["Demanda promedio anual (kW)"].notna(),
         "estatus_demanda"
     ] = "Estimada PDBT con NREL"
 
     df.loc[
         df["Tarifa"].eq("PDBT")
-        & df["Demanda máxima anual (kW)"].isna(),
+        & df["Demanda promedio anual (kW)"].isna(),
         "estatus_demanda"
     ] = "Pendiente perfil NREL"
 
@@ -8202,7 +8206,7 @@ def aplicar_calibracion_hibrida_pdbt_allux(
 
     Metodología:
     1) Para locales medidos GDMTH/GDMTO/GDBT:
-       ratio_real = demanda_maxima_anual_kw / kWh_día_promedio
+       ratio_real = demanda_promedio_anual_kw / kWh_día_promedio
 
     2) Para PDBT con NREL:
        ratio_nrel = demanda_pdbt_nrel_kw / kWh_día_promedio
@@ -8224,8 +8228,8 @@ def aplicar_calibracion_hibrida_pdbt_allux(
     demanda_col = first_existing_column(
         df,
         [
-            "Demanda máxima anual (kW)",
-            "demanda_maxima_anual_kw"
+            "Demanda promedio anual (kW)",
+            "demanda_promedio_anual_kw"
         ]
     )
 
@@ -8737,16 +8741,16 @@ def aplicar_calibracion_hibrida_pdbt_allux(
         demanda_col
     ] = demanda_hibrida.values
 
-    if "demanda_maxima_anual_kw" in df.columns:
+    if "demanda_promedio_anual_kw" in df.columns:
         df.loc[
             mask_pdbt_aplicar,
-            "demanda_maxima_anual_kw"
+            "demanda_promedio_anual_kw"
         ] = demanda_hibrida.values
 
-    if "Demanda máxima anual (kW)" in df.columns:
+    if "Demanda promedio anual (kW)" in df.columns:
         df.loc[
             mask_pdbt_aplicar,
-            "Demanda máxima anual (kW)"
+            "Demanda promedio anual (kW)"
         ] = demanda_hibrida.values
 
     # Recalcular densidad PDBT ajustada.
@@ -9194,7 +9198,7 @@ with tab_resumen:
         )
 
     # ------------------------------------------------------------
-    # kW contratados y demanda máxima anual total
+    # kW contratados y demanda promedio anual total
     # ------------------------------------------------------------
 
     kw_contratados_total = pd.NA
@@ -9209,20 +9213,15 @@ with tab_resumen:
             errors="coerce"
         ).sum(skipna=True)
 
-    demanda_maxima_anual_total_kw = pd.NA
+    demanda_promedio_anual_total_kw = pd.NA
 
     if (
         "benchmark_densidad_base" in globals()
         and not benchmark_densidad_base.empty
     ):
-        if "demanda_maxima_anual_kw" in benchmark_densidad_base.columns:
-            demanda_maxima_anual_total_kw = pd.to_numeric(
-                benchmark_densidad_base["demanda_maxima_anual_kw"],
-                errors="coerce"
-            ).sum(skipna=True)
-        elif "Demanda máxima anual (kW)" in benchmark_densidad_base.columns:
-            demanda_maxima_anual_total_kw = pd.to_numeric(
-                benchmark_densidad_base["Demanda máxima anual (kW)"],
+        if "demanda_promedio_anual_kw" in benchmark_densidad_base.columns:
+            demanda_promedio_anual_total_kw = pd.to_numeric(
+                benchmark_densidad_base["demanda_promedio_anual_kw"],
                 errors="coerce"
             ).sum(skipna=True)
 
@@ -9276,8 +9275,8 @@ with tab_resumen:
     )
 
     col7.metric(
-        "Demanda máxima anual (kW)",
-        format_number(demanda_maxima_anual_total_kw, 0)
+        "Demanda promedio anual (kW)",
+        format_number(demanda_promedio_anual_total_kw, 0)
     )
 
     col8.metric(
@@ -9631,7 +9630,7 @@ with tab_resumen:
     )
 
     st.caption(
-        "Esta sección calcula la densidad de demanda máxima anual por giro comercial y tarifa. "
+        "Esta sección calcula la densidad de demanda promedio anual por giro comercial y tarifa. "
         "El universo base es la muestra global validada de locales ocupados con recibo."
     )
 
@@ -9844,8 +9843,8 @@ with tab_resumen:
         demanda_col_benchmark = first_existing_column(
             benchmark_base_global,
             [
-                "Demanda máxima anual (kW)",
-                "demanda_maxima_anual_kw"
+                "Demanda promedio anual (kW)",
+                "demanda_promedio_anual_kw"
             ]
         )
 
@@ -10183,7 +10182,7 @@ with tab_resumen:
                         "parser_no_servicio_match",
                         "medidor",
                         "parser_medidor_match",
-                        "Demanda máxima anual (kW)",
+                        "Demanda promedio anual (kW)",
                         "demanda_benchmark_kw",
                         "Area m2",
                         "area_benchmark_m2",
@@ -10821,7 +10820,7 @@ with tab_resumen:
                     "tarifa_benchmark": "Tarifa",
                     "locales": "No. de locales",
                     "area_promedio_m2": "Área promedio (m²)",
-                    "demanda_promedio_anual_promedio_kw": "Demanda máxima anual (kW)",
+                    "demanda_promedio_anual_promedio_kw": "Demanda promedio anual (kW)",
                     "densidad_promedio_w_m2": "Densidad promedio (W/m²)",
                     "densidad_mediana_w_m2": "Densidad mediana (W/m²)",
                     "p25_w_m2": "P25 (W/m²)",
@@ -10832,7 +10831,7 @@ with tab_resumen:
 
             for col in [
                 "Área promedio (m²)",
-                "Demanda máxima anual (kW)",
+                "Demanda promedio anual (kW)",
                 "Densidad promedio (W/m²)",
                 "Densidad mediana (W/m²)",
                 "P25 (W/m²)",
@@ -10861,7 +10860,7 @@ with tab_resumen:
                     "Tarifa",
                     "No. de locales",
                     "Área promedio (m²)",
-                    "Demanda máxima anual (kW)",
+                    "Demanda promedio anual (kW)",
                     "Densidad promedio (W/m²)",
                     "Densidad mediana (W/m²)",
                     "P25 (W/m²)",
@@ -10965,7 +10964,7 @@ with tab_resumen:
                 errors="coerce"
             )
 
-            detalle_tabla["Demanda máxima anual (kW)"] = pd.to_numeric(
+            detalle_tabla["Demanda promedio anual (kW)"] = pd.to_numeric(
                 detalle_locales_filtrado["demanda_benchmark_kw"],
                 errors="coerce"
             )
@@ -11008,7 +11007,7 @@ with tab_resumen:
 
             for col_num in [
                 "Área (m²)",
-                "Demanda máxima anual (kW)",
+                "Demanda promedio anual (kW)",
                 "Demanda NREL original (kW)",
                 "Factor ajuste Allux PDBT",
                 "Densidad promedio (W/m²)"
@@ -11031,7 +11030,7 @@ with tab_resumen:
             )
 
             st.caption(
-                "La Demanda máxima anual (kW) se calcula como el promedio de la demanda anual "
+                "La Demanda promedio anual (kW) se calcula como el promedio de la demanda anual "
                 "de los locales dentro del grupo seleccionado. "
                 "El Área promedio (m²) se calcula como el promedio del área de esos mismos locales. "
                 "La Densidad promedio (W/m²) se calcula como el promedio de la densidad individual "
@@ -11108,13 +11107,13 @@ with tab_general:
 
     with col_demanda:
         st.markdown(
-            '<div class="subsection-title">Demanda máxima anual (kW) por nivel de tensión</div>',
+            '<div class="subsection-title">Demanda promedio anual (kW) por nivel de tensión</div>',
             unsafe_allow_html=True
         )
 
         if "benchmark_densidad_base" not in globals() or benchmark_densidad_base.empty:
             st.info(
-                "No está disponible la base validada para calcular Demanda máxima anual (kW) por nivel de tensión."
+                "No está disponible la base validada para calcular Demanda promedio anual (kW) por nivel de tensión."
             )
 
         else:
@@ -11131,11 +11130,11 @@ with tab_general:
                 ]
             )
 
-            demanda_maxima_col = first_existing_column(
+            demanda_promedio_col = first_existing_column(
                 demanda_portafolio,
                 [
-                    "Demanda máxima anual (kW)",
-                    "demanda_maxima_anual_kw"
+                    "Demanda promedio anual (kW)",
+                    "demanda_promedio_anual_kw"
                 ]
             )
 
@@ -11144,9 +11143,9 @@ with tab_general:
                     "No encontré columna de tarifa en la base validada para clasificar BT/MT."
                 )
 
-            elif demanda_maxima_col is None:
+            elif demanda_promedio_col is None:
                 st.info(
-                    "No encontré columna de Demanda máxima anual (kW) en la base validada."
+                    "No encontré columna de Demanda promedio anual (kW) en la base validada."
                 )
 
             else:
@@ -11175,27 +11174,29 @@ with tab_general:
                 ].copy()
 
                 demanda_portafolio = demanda_portafolio[
-                    demanda_portafolio[demanda_maxima_col].notna()
-                    & demanda_portafolio[demanda_maxima_col].gt(0)
+                    demanda_portafolio["Demanda promedio anual (kW)"].notna()
+                    & demanda_portafolio["Demanda promedio anual (kW)"].gt(0)
                 ].copy()
 
                 if demanda_portafolio.empty:
                     st.info(
-                        "No hay Demanda máxima anual (kW) calculable para graficar por nivel de tensión."
+                        "No hay Demanda promedio anual (kW) calculable para graficar por nivel de tensión."
                     )
 
                 else:
                     demanda_mt_bt = (
                         demanda_portafolio
-                        .groupby("Nivel de tensión", dropna=False)[demanda_maxima_col]
+                        .groupby("Nivel de tensión", dropna=False)["Demanda promedio anual (kW)"]
                         .sum()
                         .reset_index()
                     )
 
-                    total_demanda_mt_bt = demanda_mt_bt[demanda_maxima_col].sum(skipna=True)
+                    total_demanda_mt_bt = demanda_mt_bt[
+                        "Demanda promedio anual (kW)"
+                    ].sum(skipna=True)
 
                     demanda_mt_bt["(%)"] = (
-                        demanda_mt_bt[demanda_maxima_col]
+                        demanda_mt_bt["Demanda promedio anual (kW)"]
                         / total_demanda_mt_bt
                         * 100
                         if total_demanda_mt_bt > 0
@@ -11204,8 +11205,8 @@ with tab_general:
 
                     demanda_mt_bt_display = demanda_mt_bt.copy()
 
-                    demanda_mt_bt_display[demanda_maxima_col] = (
-                        demanda_mt_bt_display[demanda_maxima_col]
+                    demanda_mt_bt_display["Demanda promedio anual (kW)"] = (
+                        demanda_mt_bt_display["Demanda promedio anual (kW)"]
                         .round(1)
                     )
 
@@ -11215,7 +11216,7 @@ with tab_general:
                     )
 
                     fig_demanda = demanda_mt_bt.set_index("Nivel de tensión").plot.pie(
-                        y=demanda_maxima_col,
+                        y="Demanda promedio anual (kW)",
                         autopct="%1.1f%%",
                         figsize=(4, 4),
                         legend=False
@@ -11230,7 +11231,7 @@ with tab_general:
                     )
 
                     st.caption(
-                        "Esta gráfica suma la Demanda máxima anual (kW) de todos los locales ocupados con recibo "
+                        "Esta gráfica suma la Demanda promedio anual (kW) de todos los locales ocupados con recibo "
                         "en todos los centros comerciales, agrupada por nivel de tensión derivado de la tarifa: "
                         "BT = PDBT + GDBT; MT = GDMTH + GDMTO. "
                         + NOTA_DEMANDA_PROMEDIO_ANUAL
@@ -12803,23 +12804,12 @@ with tab_cc:
                 ] = temp_nombre["demanda_contratada_kw"].values
 
             # --------------------------------------------------------
-            # Demanda máxima anual
+            # Demanda promedio anual
             # --------------------------------------------------------
 
-            if "demanda_maxima_anual_kw" in demanda_df.columns:
-                demanda_df["Demanda máxima anual (kW)"] = clean_number_series(
-                    demanda_df["demanda_maxima_anual_kw"]
-                )
-            else:
-                demanda_df["Demanda máxima anual (kW)"] = pd.NA
-
-            # Conservamos promedio como referencia, pero ya no es la métrica principal.
-            if "demanda_promedio_anual_kw" in demanda_df.columns:
-                demanda_df["Demanda promedio anual (kW)"] = clean_number_series(
-                    demanda_df["demanda_promedio_anual_kw"]
-                )
-            else:
-                demanda_df["Demanda promedio anual (kW)"] = pd.NA
+            demanda_df["Demanda promedio anual (kW)"] = clean_number_series(
+                demanda_df["demanda_promedio_anual_kw"]
+            )
 
             demanda_df["Demanda contratada kW"] = clean_number_series(
                 demanda_df["Demanda contratada kW"]
@@ -12829,16 +12819,11 @@ with tab_cc:
             # No eliminar locales ocupados con recibo
             # --------------------------------------------------------
             # La sección debe conservar todos los locales de muestra_cc_global.
-            # Si falta demanda contratada o demanda máxima, el local se conserva
+            # Si falta demanda contratada o demanda real, el local se conserva
             # y se muestra con estatus pendiente.
 
             demanda_df["Demanda contratada kW"] = pd.to_numeric(
                 demanda_df["Demanda contratada kW"],
-                errors="coerce"
-            )
-
-            demanda_df["Demanda máxima anual (kW)"] = pd.to_numeric(
-                demanda_df["Demanda máxima anual (kW)"],
                 errors="coerce"
             )
 
@@ -12857,11 +12842,11 @@ with tab_cc:
                 0
             )
 
-            demanda_df["Máxima anual (%)"] = np.where(
-                demanda_df["Demanda máxima anual (kW)"].notna()
+            demanda_df["Promedio anual (%)"] = np.where(
+                demanda_df["Demanda promedio anual (kW)"].notna()
                 & demanda_df["Demanda contratada kW"].notna()
                 & (demanda_df["Demanda contratada kW"] > 0),
-                demanda_df["Demanda máxima anual (kW)"]
+                demanda_df["Demanda promedio anual (kW)"]
                 / demanda_df["Demanda contratada kW"]
                 * 100,
                 pd.NA
@@ -12899,7 +12884,7 @@ with tab_cc:
 
             if demanda_df.empty:
                 st.info(
-                    "No hay locales con demanda contratada y demanda máxima anual suficientes "
+                    "No hay locales con demanda contratada y demanda promedio anual suficientes "
                     "para este centro comercial."
                 )
 
@@ -12927,7 +12912,7 @@ with tab_cc:
                 ).reset_index(drop=True)
 
                 st.markdown(
-                    '<div class="subsection-title">Resumen de demanda contratada vs demanda máxima anual</div>',
+                    '<div class="subsection-title">Resumen de demanda contratada vs demanda promedio anual</div>',
                     unsafe_allow_html=True
                 )
 
@@ -12939,8 +12924,8 @@ with tab_cc:
                 )
 
                 st.caption(
-                    f"Locales con demanda máxima anual calculada: "
-                    f"{demanda_df['Demanda máxima anual (kW)'].notna().sum():,} de {len(demanda_df):,}"
+                    f"Locales con demanda promedio anual calculada: "
+                    f"{demanda_df['Demanda promedio anual (kW)'].notna().sum():,} de {len(demanda_df):,}"
                 )
 
                 col_dem_2.metric(
@@ -12949,34 +12934,29 @@ with tab_cc:
                 )
 
                 col_dem_3.metric(
-                    "Demanda máxima anual (kW)",
-                    format_number(demanda_df["Demanda máxima anual (kW)"].sum(), 1)
+                    "Demanda promedio anual (kW)",
+                    format_number(demanda_df["Demanda promedio anual (kW)"].sum(), 1)
                 )
 
                 col_dem_4.metric(
-                    "Uso máximo anual vs contratada",
-                    f"{demanda_df['Máxima anual (%)'].mean():,.1f}%"
+                    "Uso promedio vs contratada",
+                    f"{demanda_df['Promedio anual (%)'].mean():,.1f}%"
                 )
 
-                st.caption(
-                    "Nota: Demanda máxima anual (kW) = máxima demanda mensual registrada o estimada "
-                    "dentro de la ventana anual disponible. Para GDMTH, GDMTO y GDBT se toma el kwmax "
-                    "del parser; para PDBT se usa la demanda estimada con perfiles NREL cuando existe "
-                    "información suficiente."
-                )
+                st.caption(NOTA_DEMANDA_PROMEDIO_ANUAL)
 
                 # --------------------------------------------------------
                 # Base para gráfica
                 # --------------------------------------------------------
                 # La gráfica debe mostrar todos los locales ocupados con recibo.
-                # Si un local todavía no tiene demanda máxima anual calculada,
-                # se grafica Máxima anual (%) = 0 temporalmente.
+                # Si un local todavía no tiene demanda promedio anual calculada,
+                # se grafica Promedio anual (%) = 0 temporalmente.
 
                 chart_plot_df = demanda_df.copy()
 
-                chart_plot_df["Máxima anual (%) gráfica"] = (
+                chart_plot_df["Promedio anual (%) gráfica"] = (
                     pd.to_numeric(
-                        chart_plot_df["Máxima anual (%)"],
+                        chart_plot_df["Promedio anual (%)"],
                         errors="coerce"
                     )
                     .fillna(0)
@@ -12987,13 +12967,13 @@ with tab_cc:
                 )[
                     [
                         "Contratada (%)",
-                        "Máxima anual (%) gráfica"
+                        "Promedio anual (%) gráfica"
                     ]
                 ]
 
                 chart_df = chart_df.rename(
                     columns={
-                        "Máxima anual (%) gráfica": "Demanda máxima anual (%)"
+                        "Promedio anual (%) gráfica": "Demanda promedio anual (%)"
                     }
                 )
 
@@ -13008,15 +12988,15 @@ with tab_cc:
 
                 ax.set_ylim(0, 200)
 
-                maxima_anual_max_grafica = pd.to_numeric(
-                    demanda_df["Máxima anual (%)"],
+                promedio_anual_max_grafica = pd.to_numeric(
+                    demanda_df["Promedio anual (%)"],
                     errors="coerce"
                 ).max()
 
-                if pd.notna(maxima_anual_max_grafica) and maxima_anual_max_grafica > 200:
+                if pd.notna(promedio_anual_max_grafica) and promedio_anual_max_grafica > 200:
                     st.caption(
-                        f"Nota: existen locales con demanda máxima anual mayor a 200% de la contratada. "
-                        f"El valor máximo es {maxima_anual_max_grafica:,.1f}%, por lo que la gráfica se recortó visualmente para mejorar la lectura."
+                        f"Nota: existen locales con demanda promedio anual mayor a 200% de la contratada. "
+                        f"El valor máximo es {promedio_anual_max_grafica:,.1f}%, por lo que la gráfica se recortó visualmente para mejorar la lectura."
                     )
 
                 grupos_tarifa = (
@@ -13064,7 +13044,7 @@ with tab_cc:
                     "Locales ocupados con recibo",
                     labelpad=35
                 )
-                ax.set_title("Demanda máxima anual como % de la demanda contratada")
+                ax.set_title("Demanda promedio anual como % de la demanda contratada")
 
                 ax.axhline(
                     100,
@@ -13087,9 +13067,9 @@ with tab_cc:
                 demanda_df["estatus_demanda"] = "Calculada"
 
                 demanda_df.loc[
-                    demanda_df["Demanda máxima anual (kW)"].isna(),
+                    demanda_df["Demanda promedio anual (kW)"].isna(),
                     "estatus_demanda"
-                ] = "Sin demanda máxima anual calculada"
+                ] = "Sin demanda promedio anual calculada"
 
                 if "Tarifa" in demanda_df.columns:
                     demanda_df.loc[
@@ -13097,7 +13077,7 @@ with tab_cc:
                         .astype(str)
                         .str.upper()
                         .isin(["GDMTH", "GDMTO", "GDBT"])
-                        & demanda_df["Demanda máxima anual (kW)"].notna(),
+                        & demanda_df["Demanda promedio anual (kW)"].notna(),
                         "estatus_demanda"
                     ] = "Calculada con kwmax"
 
@@ -13106,7 +13086,7 @@ with tab_cc:
                         .astype(str)
                         .str.upper()
                         .eq("PDBT")
-                        & demanda_df["Demanda máxima anual (kW)"].notna(),
+                        & demanda_df["Demanda promedio anual (kW)"].notna(),
                         "estatus_demanda"
                     ] = "Estimada PDBT con NREL"
 
@@ -13115,7 +13095,7 @@ with tab_cc:
                         .astype(str)
                         .str.upper()
                         .eq("PDBT")
-                        & demanda_df["Demanda máxima anual (kW)"].isna(),
+                        & demanda_df["Demanda promedio anual (kW)"].isna(),
                         "estatus_demanda"
                     ] = "Pendiente perfil NREL"
 
@@ -13136,8 +13116,8 @@ with tab_cc:
                         "Nombre Comercial",
                         "no_servicio_tabla",
                         "Demanda contratada kW",
-                        "Demanda máxima anual (kW)",
-                        "Máxima anual (%)",
+                        "Demanda promedio anual (kW)",
+                        "Promedio anual (%)",
                         "meses_con_demanda",
                         "estatus_demanda"
                     ]
@@ -13158,9 +13138,8 @@ with tab_cc:
 
                 for col in [
                     "Demanda contratada (kW)",
-                    "Demanda máxima anual (kW)",
-                    "Demanda máxima anual (kW)",
-                    "Máxima anual (%)"
+                    "Demanda promedio anual (kW)",
+                    "Promedio anual (%)"
                 ]:
                     if col in demanda_display.columns:
                         demanda_display[col] = pd.to_numeric(
@@ -13589,13 +13568,13 @@ with tab_cc:
 
                         densidad_display.loc[
                             densidad_display["tarifa"].isin(["GDMTH", "GDMTO", "GDBT"])
-                            & densidad_display["Demanda máxima anual (kW)"].notna(),
+                            & densidad_display["Demanda promedio anual (kW)"].notna(),
                             "Fuente densidad"
                         ] = "kwmax del recibo"
 
                         densidad_display.loc[
                             densidad_display["tarifa"].eq("PDBT")
-                            & densidad_display["Demanda máxima anual (kW)"].notna(),
+                            & densidad_display["Demanda promedio anual (kW)"].notna(),
                             "Fuente densidad"
                         ] = "Perfiles NREL"
 
@@ -13628,7 +13607,6 @@ with tab_cc:
                                 "Giro",
                                 "tarifa",
                                 "No servicio",
-                                "Demanda máxima anual (kW)",
                                 "Demanda promedio anual (kW)",
                                 "Area m2",
                                 "Densidad de demanda W/m2",
@@ -13645,7 +13623,6 @@ with tab_cc:
                         ].copy()
 
                         for col in [
-                            "Demanda máxima anual (kW)",
                             "Demanda promedio anual (kW)",
                             "Area m2",
                             "Densidad de demanda W/m2",
@@ -13672,8 +13649,9 @@ with tab_cc:
                         st.caption(
                             "Esta sección usa la misma base maestra de densidad del Resumen Ejecutivo, "
                             "filtrada al centro comercial seleccionado y al giro comercial seleccionado. "
-                            "La Densidad de demanda (W/m²) se calcula como Demanda máxima anual (kW) "
-                            "/ m² × 1,000. Se conserva Demanda máxima anual (kW) como referencia."
+                            "La Densidad de demanda (W/m²) se calcula como Demanda promedio anual (kW) "
+                            "/ m² × 1,000. "
+                            + NOTA_DEMANDA_PROMEDIO_ANUAL
                         )
 
 
@@ -13799,11 +13777,11 @@ with tab_sg:
                         ]
                     )
 
-                    demanda_maxima_col = first_existing_column(
+                    demanda_promedio_col = first_existing_column(
                         sg_df,
                         [
-                            "demanda_maxima_anual_kw",
-                            "Demanda máxima anual (kW)"
+                            "demanda_promedio_anual_kw",
+                            "Demanda promedio anual (kW)"
                         ]
                     )
 
@@ -13825,9 +13803,9 @@ with tab_sg:
                         else np.nan
                     )
 
-                    sg_df["_demanda_maxima_anual_kw"] = (
-                        pd.to_numeric(sg_df[demanda_maxima_col], errors="coerce")
-                        if demanda_maxima_col
+                    sg_df["_demanda_promedio_anual_kw"] = (
+                        pd.to_numeric(sg_df[demanda_promedio_col], errors="coerce")
+                        if demanda_promedio_col
                         else np.nan
                     )
 
@@ -13988,7 +13966,7 @@ with tab_sg:
                     sg_locales_df["Densidad demanda (W/m² ABR)"] = np.where(
                         sg_locales_df["_abr_meta"].gt(0),
                         (
-                            sg_locales_df["_demanda_maxima_anual_kw"]
+                            sg_locales_df["_demanda_promedio_anual_kw"]
                             / sg_locales_df["_abr_meta"]
                             * 1000
                         ),
@@ -14020,8 +13998,8 @@ with tab_sg:
                         "Demanda Contratada (kW)": (
                             sg_locales_df["_demanda_contratada_kw"]
                         ),
-                        "Demanda máxima anual (kW)": (
-                            sg_locales_df["_demanda_maxima_anual_kw"]
+                        "Demanda promedio anual (kW)": (
+                            sg_locales_df["_demanda_promedio_anual_kw"]
                         ),
                         "Densidad demanda (W/m² ABR)": (
                             sg_locales_df["Densidad demanda (W/m² ABR)"]
@@ -14046,7 +14024,7 @@ with tab_sg:
 
                     for col in [
                         "Demanda Contratada (kW)",
-                        "Demanda máxima anual (kW)",
+                        "Demanda promedio anual (kW)",
                         "Densidad demanda (W/m² ABR)",
                         "Consumo Anual (kWh)",
                         "Densidad de Consumo Anual (kWh/m² ABR)"
@@ -14118,7 +14096,7 @@ with tab_sg:
                     # Se suman:
                     # - No. de medidores de Servicios Generales
                     # - Demanda Contratada (kW)
-                    # - Demanda máxima anual (kW)
+                    # - Demanda promedio anual (kW)
                     # - Consumo Anual (kWh)
                     #
                     # Las densidades del TOTAL se dejan vacías porque no se deben
@@ -14131,7 +14109,7 @@ with tab_sg:
                     ].sum(skipna=True)
 
                     total_demanda_promedio_anual = sg_resumen_df[
-                        "Demanda máxima anual (kW)"
+                        "Demanda promedio anual (kW)"
                     ].sum(skipna=True)
 
                     total_consumo_anual = sg_resumen_df[
@@ -14146,7 +14124,7 @@ with tab_sg:
                         "Clima": "",
                         "No. de medidores de Servicios Generales": total_servicios_generales,
                         "Demanda Contratada (kW)": total_demanda_contratada,
-                        "Demanda máxima anual (kW)": total_demanda_promedio_anual,
+                        "Demanda promedio anual (kW)": total_demanda_promedio_anual,
                         "Densidad demanda (W/m² ABR)": np.nan,
                         "Consumo Anual (kWh)": total_consumo_anual,
                         "Densidad de Consumo Anual (kWh/m² ABR)": np.nan
@@ -14180,7 +14158,7 @@ with tab_sg:
                         "Clima",
                         "No. de medidores de Servicios Generales",
                         "Demanda Contratada (kW)",
-                        "Demanda máxima anual (kW)",
+                        "Demanda promedio anual (kW)",
                         "Densidad demanda (W/m² ABR)",
                         "Consumo Anual (kWh)",
                         "Densidad de Consumo Anual (kWh/m² ABR)"
@@ -14206,7 +14184,7 @@ with tab_sg:
                     for col in [
                         "No. de medidores de Servicios Generales",
                         "Demanda Contratada (kW)",
-                        "Demanda máxima anual (kW)",
+                        "Demanda promedio anual (kW)",
                         "Densidad demanda (W/m² ABR)",
                         "Consumo Anual (kWh)",
                         "Densidad de Consumo Anual (kWh/m² ABR)"
@@ -14225,7 +14203,7 @@ with tab_sg:
 
                     for col in [
                         "Demanda Contratada (kW)",
-                        "Demanda máxima anual (kW)",
+                        "Demanda promedio anual (kW)",
                         "Densidad demanda (W/m² ABR)",
                         "Consumo Anual (kWh)",
                         "Densidad de Consumo Anual (kWh/m² ABR)"
@@ -14341,7 +14319,7 @@ with tab_sg:
                     )
 
                     st.caption(
-                        "La Densidad demanda (W/m² ABR) se calcula como Demanda máxima anual (kW) "
+                        "La Densidad demanda (W/m² ABR) se calcula como Demanda promedio anual (kW) "
                         "/ ABR × 1,000. "
                         + NOTA_DEMANDA_PROMEDIO_ANUAL
                     )
@@ -14350,15 +14328,15 @@ with tab_sg:
                 # Gráfica de densidad de demanda por medidor
                 # ------------------------------------------------------------
                 st.markdown(
-                    '<div class="section-title">Demanda contratada vs demanda máxima anual de Servicios Generales</div>',
+                    '<div class="section-title">Demanda contratada vs demanda promedio anual de Servicios Generales</div>',
                     unsafe_allow_html=True
                 )
 
                 # ------------------------------------------------------------
-                # Gráfica: demanda contratada vs demanda máxima anual
+                # Gráfica: demanda contratada vs demanda promedio anual
                 # ------------------------------------------------------------
                 # Usamos la misma tabla resumen por centro comercial.
-                # No recalculamos demanda: usamos "Demanda máxima anual (kW)",
+                # No recalculamos demanda: usamos "Demanda promedio anual (kW)",
                 # que ya viene de la base validada del benchmark.
 
                 plot_df = sg_resumen_display[
@@ -14370,40 +14348,40 @@ with tab_sg:
                     errors="coerce"
                 )
 
-                plot_df["Demanda máxima anual (kW)"] = pd.to_numeric(
-                    plot_df["Demanda máxima anual (kW)"],
+                plot_df["Demanda promedio anual (kW)"] = pd.to_numeric(
+                    plot_df["Demanda promedio anual (kW)"],
                     errors="coerce"
                 )
 
                 plot_df = plot_df[
                     plot_df["Demanda Contratada (kW)"].notna()
                     & plot_df["Demanda Contratada (kW)"].gt(0)
-                    & plot_df["Demanda máxima anual (kW)"].notna()
+                    & plot_df["Demanda promedio anual (kW)"].notna()
                 ].copy()
 
                 if plot_df.empty:
                     st.info(
-                        "No hay información suficiente para graficar demanda contratada vs demanda máxima anual."
+                        "No hay información suficiente para graficar demanda contratada vs demanda promedio anual."
                     )
 
                 else:
                     plot_df["Contratada (%)"] = 100
 
-                    plot_df["Máxima anual (%)"] = (
-                        plot_df["Demanda máxima anual (kW)"]
+                    plot_df["Promedio anual (%)"] = (
+                        plot_df["Demanda promedio anual (kW)"]
                         / plot_df["Demanda Contratada (kW)"]
                         * 100
                     )
 
-                    max_promedio_anual_sg = plot_df["Máxima anual (%)"].max(skipna=True)
+                    max_promedio_anual_sg = plot_df["Promedio anual (%)"].max(skipna=True)
 
                     if pd.notna(max_promedio_anual_sg) and max_promedio_anual_sg > 200:
                         st.caption(
-                            f"Nota: existen centros comerciales con demanda máxima anual mayor a 200% de la contratada. "
+                            f"Nota: existen centros comerciales con demanda promedio anual mayor a 200% de la contratada. "
                             f"El valor máximo es {max_promedio_anual_sg:,.1f}%, por lo que la gráfica se recortó visualmente para mejorar la lectura."
                         )
 
-                    plot_df["Máxima anual visual (%)"] = plot_df["Máxima anual (%)"].clip(
+                    plot_df["Promedio anual visual (%)"] = plot_df["Promedio anual (%)"].clip(
                         upper=200
                     )
 
@@ -14423,15 +14401,15 @@ with tab_sg:
                     errors="coerce"
                 )
 
-                plot_df["Demanda máxima anual (kW)"] = pd.to_numeric(
-                    plot_df["Demanda máxima anual (kW)"],
+                plot_df["Demanda promedio anual (kW)"] = pd.to_numeric(
+                    plot_df["Demanda promedio anual (kW)"],
                     errors="coerce"
                 )
 
                 # Conserva locales que tengan al menos una de las dos demandas.
                 plot_df = plot_df[
                     plot_df["Demanda Contratada (kW)"].notna()
-                    | plot_df["Demanda máxima anual (kW)"].notna()
+                    | plot_df["Demanda promedio anual (kW)"].notna()
                 ].copy()
 
                 if plot_df.empty:
@@ -14464,7 +14442,7 @@ with tab_sg:
                     # --------------------------------------------------------
                     # Gráfica por local:
                     # Demanda contratada = 100%
-                    # Demanda máxima anual = % respecto a la contratada
+                    # Demanda promedio anual = % respecto a la contratada
                     # --------------------------------------------------------
 
                     # Solo se pueden calcular porcentajes cuando existe
@@ -14484,26 +14462,26 @@ with tab_sg:
                         # La barra azul siempre representa 100% de la demanda contratada.
                         plot_df["Contratada (%)"] = 100.0
 
-                        # La barra naranja representa el uso máxima anual
+                        # La barra naranja representa el uso promedio anual
                         # respecto a la demanda contratada del mismo local.
-                        plot_df["Demanda máxima anual (%)"] = (
-                            plot_df["Demanda máxima anual (kW)"]
+                        plot_df["Demanda promedio anual (%)"] = (
+                            plot_df["Demanda promedio anual (kW)"]
                             / plot_df["Demanda Contratada (kW)"]
                             * 100
                         )
 
-                        # Conservamos los locales sin demanda máxima anual:
+                        # Conservamos los locales sin demanda promedio anual:
                         # aparecen con barra naranja en cero.
-                        plot_df["Demanda máxima anual (%)"] = (
+                        plot_df["Demanda promedio anual (%)"] = (
                             pd.to_numeric(
-                                plot_df["Demanda máxima anual (%)"],
+                                plot_df["Demanda promedio anual (%)"],
                                 errors="coerce"
                             )
                             .fillna(0)
                         )
 
                         max_promedio_anual_sg = (
-                            plot_df["Demanda máxima anual (%)"]
+                            plot_df["Demanda promedio anual (%)"]
                             .max(skipna=True)
                         )
 
@@ -14513,7 +14491,7 @@ with tab_sg:
                         ):
                             st.caption(
                                 f"Nota: existen locales de Servicios Generales con "
-                                f"demanda máxima anual mayor a 200% de la contratada. "
+                                f"demanda promedio anual mayor a 200% de la contratada. "
                                 f"El valor máximo es "
                                 f"{max_promedio_anual_sg:,.1f}%, por lo que la gráfica "
                                 f"se recortó visualmente para mejorar la lectura."
@@ -14521,8 +14499,8 @@ with tab_sg:
 
                         # Se recorta solo visualmente; el valor original
                         # se conserva arriba para la nota.
-                        plot_df["Demanda máxima anual visual (%)"] = (
-                            plot_df["Demanda máxima anual (%)"]
+                        plot_df["Demanda promedio anual visual (%)"] = (
+                            plot_df["Demanda promedio anual (%)"]
                             .clip(upper=200)
                         )
 
@@ -14542,9 +14520,9 @@ with tab_sg:
 
                         ax.bar(
                             x + width / 2,
-                            plot_df["Demanda máxima anual visual (%)"],
+                            plot_df["Demanda promedio anual visual (%)"],
                             width,
-                            label="Demanda máxima anual (%)"
+                            label="Demanda promedio anual (%)"
                         )
 
                         ax.axhline(
@@ -14564,7 +14542,7 @@ with tab_sg:
                         )
 
                         ax.set_title(
-                            "Demanda máxima anual como % de la demanda contratada"
+                            "Demanda promedio anual como % de la demanda contratada"
                         )
 
                         ax.set_xticks(x)
@@ -14582,12 +14560,7 @@ with tab_sg:
 
                         st.pyplot(fig)
 
-                        st.caption(
-                    "Nota: Demanda máxima anual (kW) = máxima demanda mensual registrada o estimada "
-                    "dentro de la ventana anual disponible. Para GDMTH, GDMTO y GDBT se toma el kwmax "
-                    "del parser; para PDBT se usa la demanda estimada con perfiles NREL cuando existe "
-                    "información suficiente."
-                )
+                        st.caption(NOTA_DEMANDA_PROMEDIO_ANUAL)
 
 
 # ============================================================
@@ -14682,7 +14655,7 @@ with tab_calidad:
         st.caption(
             "Para GDMTH, GDMTO y GDBT la demanda base mensual se toma de `kwmax`. "
             "Para PDBT la demanda base mensual se estima con perfiles NREL cuando existe información suficiente. "
-            "Esa demanda base mensual alimenta el cálculo de Demanda máxima anual (kW)."
+            "Esa demanda base mensual alimenta el cálculo de Demanda promedio anual (kW)."
         )
 
     else:
@@ -16516,13 +16489,13 @@ with tab_anexo:
     )
 
     st.markdown(
-        '<div class="subsection-title">Metodología de estimación de Demanda máxima anual (kW)</div>',
+        '<div class="subsection-title">Metodología de estimación de Demanda promedio anual (kW)</div>',
         unsafe_allow_html=True
     )
 
     metodologia_df = pd.DataFrame({
         "Tarifa": ["GDMTH", "GDMTO", "GDBT", "PDBT"],
-        "Criterio de Demanda máxima anual (kW)": [
+        "Criterio de Demanda promedio anual (kW)": [
             "Promedio de kwmax de los recibos más recientes disponibles",
             "Promedio de kwmax de los recibos más recientes disponibles",
             "Promedio de kwmax de los recibos más recientes disponibles",
@@ -16543,12 +16516,7 @@ with tab_anexo:
     })
 
     st.dataframe(metodologia_df, use_container_width=True)
-    st.caption(
-                    "Nota: Demanda máxima anual (kW) = máxima demanda mensual registrada o estimada "
-                    "dentro de la ventana anual disponible. Para GDMTH, GDMTO y GDBT se toma el kwmax "
-                    "del parser; para PDBT se usa la demanda estimada con perfiles NREL cuando existe "
-                    "información suficiente."
-                )
+    st.caption(NOTA_DEMANDA_PROMEDIO_ANUAL)
 
     st.markdown(
         '<div class="subsection-title">Calibración híbrida PDBT: NREL + factor Allux</div>',
@@ -16569,7 +16537,7 @@ with tab_anexo:
         Para calibrar la estimación, se usan los locales del mismo portafolio que sí tienen demanda medida 
         en recibo (**GDMTH, GDMTO y GDBT**). Para esos locales se calcula:
 
-        **Ratio Allux medido = demanda máxima anual medida / kWh promedio diario**
+        **Ratio Allux medido = demanda promedio anual medida / kWh promedio diario**
 
         Para los PDBT estimados con NREL se calcula:
 
