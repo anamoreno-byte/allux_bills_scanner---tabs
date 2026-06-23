@@ -24,8 +24,6 @@ GDM_RESCUE_CSV = OUTPUT_DIR / "results_AnaTe18Jun_full_schema_v3.csv"
 
 NEW_PARSER_ROWS_CSV = OUTPUT_DIR / "results_file_path_table_1_FULL_v1.csv"
 
-PARKS_HOSPITALITY_RESCUE_CSV = OUTPUT_DIR / "results_uptown_merida_parks_hospitality_schema_v3.csv"
-
 
 st.set_page_config(
     page_title="Análisis del desempeño eléctrico",
@@ -492,7 +490,6 @@ def _preparar_rescate_csv(path):
 
     df = pd.read_csv(
         path,
-        dtype=str,
         low_memory=False
     )
 
@@ -718,8 +715,7 @@ def enriquecer_parser_con_archivos_rescate(
     parsed,
     pdbt_kwh_path,
     gdm_rescue_path,
-    new_rows_path,
-    parks_rescue_path=None
+    new_rows_path
 ):
     """
     Enriquece el parser original con 3 fuentes externas:
@@ -735,10 +731,6 @@ def enriquecer_parser_con_archivos_rescate(
        - Agrega filas nuevas que no existen en el parser.
        - También puede sustituir kwh_total, kwmax y demanda_contratada_kw
          cuando coincida por file_path.
-
-    4) results_uptown_merida_parks_hospitality_schema_v3.csv:
-       - Complementa el parser con kWh, kwmax y demanda contratada de
-         Parks Hospitality / Uptown Mérida. Se trata igual que el archivo FULL.
 
     No muestra diagnósticos en la app. Solo agrega columnas de auditoría.
     """
@@ -1215,183 +1207,6 @@ def enriquecer_parser_con_archivos_rescate(
         new_rows_path
     )
 
-    # Archivo adicional de rescate para Parks Hospitality / Uptown Mérida.
-    # Se integra al mismo flujo del FULL porque trae el mismo tipo de columnas:
-    # file_path, no_servicio, medidor, periodo_fact, kwh_total, kwmax y demanda_contratada_kw.
-    if parks_rescue_path is not None:
-        parks_rows = _preparar_rescate_csv(
-            parks_rescue_path
-        )
-
-        if not parks_rows.empty:
-
-            # Este archivo trae principalmente Parks Hospitality / Uptown Mérida,
-            # pero también puede traer recibos Iberdrola/Liverpool de Ambar.
-            # Por eso NO forzamos todo el archivo a Parks: clasificamos por file_path.
-            for col in [
-                "mall_folder",
-                "cliente_nombre",
-                "recibos_subgroup",
-                "tenant",
-                "locatario",
-                "source_utility",
-                "no_servicio",
-                "tarifa",
-                "tarifa_norm",
-                "periodo_inicio",
-                "periodo_fin"
-            ]:
-                if col not in parks_rows.columns:
-                    parks_rows[col] = pd.NA
-
-            path_rescate_txt = (
-                parks_rows["file_path"]
-                .fillna("")
-                .astype(str)
-                .str.upper()
-            )
-
-            cliente_rescate_txt = (
-                parks_rows["cliente_nombre"]
-                .fillna("")
-                .astype(str)
-                .str.upper()
-            )
-
-            mask_rescate_parks = (
-                path_rescate_txt.str.contains("PARKS", na=False)
-                | path_rescate_txt.str.contains("HOSPITALITY", na=False)
-                | cliente_rescate_txt.str.contains("PARKS", na=False)
-                | cliente_rescate_txt.str.contains("HOSPITALITY", na=False)
-            )
-
-            mask_rescate_liverpool_ambar = (
-                path_rescate_txt.str.contains("AMBAR", na=False)
-                & path_rescate_txt.str.contains("LIVERPOOL", na=False)
-            )
-
-            # Parks Hospitality / Uptown Mérida
-            parks_rows.loc[mask_rescate_parks, "mall_folder"] = "Uptown Mérida"
-            parks_rows.loc[
-                mask_rescate_parks
-                & parks_rows["cliente_nombre"].fillna("").astype(str).str.strip().isin(["", "nan", "None", "<NA>"]),
-                "cliente_nombre"
-            ] = "PARKS HOSPITALITY MERIDA S.A D"
-            parks_rows.loc[mask_rescate_parks, "recibos_subgroup"] = "PARKS HOSPITALITY"
-            parks_rows.loc[mask_rescate_parks, "tenant"] = "PARKS HOSPITALITY"
-            parks_rows.loc[mask_rescate_parks, "locatario"] = "PARKS HOSPITALITY"
-            parks_rows.loc[mask_rescate_parks, "source_utility"] = "CFE"
-
-            # Liverpool / Ambar con recibos Iberdrola.
-            # El archivo puede venir sin no_servicio y con medidor = LIVERPOOL.
-            # Creamos una llave de servicio técnica para que el cálculo anual pueda agruparlo.
-            parks_rows.loc[mask_rescate_liverpool_ambar, "mall_folder"] = "Ambar Fashion Mall Tuxtla"
-            parks_rows.loc[mask_rescate_liverpool_ambar, "cliente_nombre"] = "OPERADORA DE ALMACENES LIVERPOOL"
-            parks_rows.loc[mask_rescate_liverpool_ambar, "recibos_subgroup"] = "LIVERPOOL"
-            parks_rows.loc[mask_rescate_liverpool_ambar, "tenant"] = "LIVERPOOL"
-            parks_rows.loc[mask_rescate_liverpool_ambar, "locatario"] = "LIVERPOOL"
-            parks_rows.loc[mask_rescate_liverpool_ambar, "source_utility"] = "IBERDROLA"
-            parks_rows.loc[mask_rescate_liverpool_ambar, "no_servicio"] = "IBERDROLA_LIVERPOOL_AMBAR"
-            parks_rows.loc[mask_rescate_liverpool_ambar, "tarifa"] = "GDMTH"
-            parks_rows.loc[mask_rescate_liverpool_ambar, "tarifa_norm"] = "GDMTH"
-
-            # TOP MART / Pabellón Navojoa.
-            # En este CSV puede venir solo con kWh_total y file_path, sin no_servicio.
-            # Forzamos las llaves para que alimente al parser y después al match global.
-            mask_rescate_topmart = (
-                path_rescate_txt.str.contains("TOPMART", na=False)
-                | path_rescate_txt.str.contains("TOP MART", na=False)
-                | cliente_rescate_txt.str.contains("TOPMART", na=False)
-                | cliente_rescate_txt.str.contains("TOP MART", na=False)
-            )
-
-            parks_rows.loc[mask_rescate_topmart, "mall_folder"] = "Pabellón Navojoa"
-            parks_rows.loc[mask_rescate_topmart, "cliente_nombre"] = "TOP MART"
-            parks_rows.loc[mask_rescate_topmart, "recibos_subgroup"] = "TOP MART"
-            parks_rows.loc[mask_rescate_topmart, "tenant"] = "TOP MART"
-            parks_rows.loc[mask_rescate_topmart, "locatario"] = "TOP MART"
-            parks_rows.loc[mask_rescate_topmart, "source_utility"] = "CFE"
-            parks_rows.loc[mask_rescate_topmart, "no_servicio"] = "530230300771"
-            parks_rows.loc[mask_rescate_topmart, "tarifa"] = "PDBT"
-            parks_rows.loc[mask_rescate_topmart, "tarifa_norm"] = "PDBT"
-
-            # MOM & SON'S / Midtown Jalisco.
-            # Si el CSV local en output trae estas filas, las dejamos listas para que
-            # la estimación PDBT con NREL use su kWh_total.
-            mask_rescate_mom_sons = (
-                (
-                    path_rescate_txt.str.contains("MOM", na=False)
-                    & path_rescate_txt.str.contains("SON", na=False)
-                )
-                | path_rescate_txt.str.contains("MYA", na=False)
-                | path_rescate_txt.str.contains("MIDTOWN JALISCO", na=False)
-                | (
-                    cliente_rescate_txt.str.contains("MOM", na=False)
-                    & cliente_rescate_txt.str.contains("SON", na=False)
-                )
-                | cliente_rescate_txt.str.contains("MYA", na=False)
-            )
-
-            parks_rows.loc[mask_rescate_mom_sons, "mall_folder"] = "Midtown Jalisco"
-            parks_rows.loc[mask_rescate_mom_sons, "cliente_nombre"] = "MOM & SON'S"
-            parks_rows.loc[mask_rescate_mom_sons, "recibos_subgroup"] = "MOM & SON'S"
-            parks_rows.loc[mask_rescate_mom_sons, "tenant"] = "MOM & SON'S"
-            parks_rows.loc[mask_rescate_mom_sons, "locatario"] = "MOM & SON'S"
-            parks_rows.loc[mask_rescate_mom_sons, "source_utility"] = "CFE"
-            parks_rows.loc[mask_rescate_mom_sons, "no_servicio"] = "43920062091"
-            parks_rows.loc[mask_rescate_mom_sons, "tarifa"] = "PDBT"
-            parks_rows.loc[mask_rescate_mom_sons, "tarifa_norm"] = "PDBT"
-
-            # ------------------------------------------------------------
-            # Periodo sintético para filas de rescate sin fechas
-            # ------------------------------------------------------------
-            # Algunas filas del CSV extra (Liverpool, Top Mart y MYA/Mom & Son's)
-            # traen kWh o kwmax pero no traen periodo. Sin periodo, la estimación PDBT
-            # y el cálculo de demanda máxima anual se quedan vacíos porque no pueden
-            # ordenar la ventana anual. Para estas filas puntuales asignamos un periodo
-            # mensual técnico de 31 días. No cambia el kWh ni el kwmax; solo permite
-            # que entren al cálculo.
-            mask_rescate_clasificado_sin_periodo = (
-                (mask_rescate_liverpool_ambar | mask_rescate_topmart | mask_rescate_mom_sons)
-                & parks_rows["periodo_inicio"].fillna("").astype(str).str.strip().isin(["", "nan", "None", "<NA>"])
-            )
-
-            parks_rows.loc[
-                mask_rescate_clasificado_sin_periodo,
-                "periodo_inicio"
-            ] = "01/01/2026"
-
-            parks_rows.loc[
-                mask_rescate_clasificado_sin_periodo,
-                "periodo_fin"
-            ] = "31/01/2026"
-
-            # Para cualquier otra fila que no clasifique, conservamos el valor original
-            # y solo rellenamos source_utility con CFE para no dejar NaN.
-            parks_rows["source_utility"] = parks_rows["source_utility"].fillna("CFE")
-
-            # IMPORTANTE: _preparar_rescate_csv calculó estas llaves antes de que
-            # forzáramos no_servicio/tarifa/medidor. Las recalculamos para que los
-            # matches por servicio/medidor y los agrupamientos anuales sí funcionen.
-            parks_rows["_key_no_servicio_enriq"] = normalize_service_cc(
-                parks_rows["no_servicio"]
-            )
-            parks_rows["_key_medidor_enriq"] = normalize_meter_cc(
-                parks_rows["medidor"]
-            )
-            parks_rows["_tarifa_enriq"] = _normalizar_tarifa_enriq(
-                parks_rows["tarifa_norm"].fillna(parks_rows["tarifa"])
-            )
-
-            if new_rows.empty:
-                new_rows = parks_rows.copy()
-            else:
-                new_rows = pd.concat(
-                    [new_rows, parks_rows],
-                    ignore_index=True,
-                    sort=False
-                )
-
     if not new_rows.empty:
 
         # ------------------------------------------------------------
@@ -1675,66 +1490,6 @@ def enriquecer_parser_con_archivos_rescate(
     p["demanda_contratada_kw"] = _to_num_enriq(
         p["demanda_contratada_kw"]
     )
-
-    # ------------------------------------------------------------
-    # Relleno conservador por servicio + medidor
-    # ------------------------------------------------------------
-    # Los archivos de enriquecimiento (especialmente results_AnaTe18Jun)
-    # pueden traer la demanda contratada en algunos recibos del servicio,
-    # pero no en todos. La demanda contratada pertenece al servicio, no al
-    # periodo; por eso, si el mismo no_servicio + medidor tiene un valor
-    # válido en otro recibo, lo propagamos a las filas del mismo servicio.
-    # No usamos esto para crear matches nuevos ni para cambiar no_servicio.
-
-    if (
-        "_key_no_servicio_enriq" in p.columns
-        and "_key_medidor_enriq" in p.columns
-        and "demanda_contratada_kw" in p.columns
-    ):
-        demanda_servicio_lookup = (
-            p[
-                p["_key_no_servicio_enriq"].fillna("").astype(str).str.strip().ne("")
-                & p["_key_medidor_enriq"].fillna("").astype(str).str.strip().ne("")
-                & p["demanda_contratada_kw"].gt(0)
-            ]
-            .groupby(["_key_no_servicio_enriq", "_key_medidor_enriq"], dropna=False)["demanda_contratada_kw"]
-            .max()
-            .reset_index()
-            .rename(columns={"demanda_contratada_kw": "_demanda_contratada_servicio_max"})
-        )
-
-        if not demanda_servicio_lookup.empty:
-            p = p.merge(
-                demanda_servicio_lookup,
-                on=["_key_no_servicio_enriq", "_key_medidor_enriq"],
-                how="left"
-            )
-
-            mask_fill_demanda_servicio = (
-                (p["demanda_contratada_kw"].isna() | p["demanda_contratada_kw"].le(0))
-                & p["_demanda_contratada_servicio_max"].gt(0)
-            )
-
-            p.loc[mask_fill_demanda_servicio, "demanda_contratada_kw"] = (
-                p.loc[mask_fill_demanda_servicio, "_demanda_contratada_servicio_max"]
-            )
-
-            if "demanda_contratada_fuente" in p.columns:
-                p.loc[
-                    mask_fill_demanda_servicio,
-                    "demanda_contratada_fuente"
-                ] = "valor_propagado_mismo_servicio_medidor"
-
-            p = _append_audit_status(
-                p,
-                mask_fill_demanda_servicio,
-                "demanda_contratada_propagada_mismo_servicio_medidor"
-            )
-
-            p = p.drop(
-                columns=["_demanda_contratada_servicio_max"],
-                errors="ignore"
-            )
 
     tarifa_col_final = _first_existing_col(
         p,
@@ -2079,473 +1834,6 @@ def cc_key(nombre):
 
     return nombre
 
-
-def _inferir_cc_key_desde_texto_largo(value):
-    """
-    Extrae la llave canónica del centro comercial desde un texto largo,
-    especialmente file_path.
-
-    Esta función es deliberadamente más estricta que cc_key():
-    solo regresa una llave si reconoce uno de los CC del portafolio dentro
-    del texto. Así evitamos que un texto cualquiera se convierta en un
-    falso centro comercial.
-    """
-    if pd.isna(value):
-        return ""
-
-    txt = str(value).replace("\\", "/")
-    txt_key = normalizar_texto_simple(limpiar_nombre_cc(txt.replace("_", " ")))
-
-    for key, canonical in CC_NAME_MAP.items():
-        if key in txt_key:
-            return canonical
-
-    return ""
-
-
-def coalesce_cc_from_columns(df: pd.DataFrame, candidates: list[str]) -> pd.Series:
-    """
-    Devuelve una llave/canonical de centro comercial.
-
-    Primero usa la primera fuente no vacía, pero si existe file_path/source_file_path
-    con un centro comercial reconocible, ese valor manda.
-
-    Motivo: detectamos casos donde el match visual asignaba el local a Ambar,
-    pero el file_path del recibo decía claramente Pabellón Salina Cruz,
-    Alaia Guanajuato o Patio Toluca. Para demanda y cobertura, el file_path
-    del recibo debe prevalecer cuando contiene un CC inequívoco.
-    """
-    if df is None or df.empty:
-        return pd.Series(dtype=str)
-
-    result = pd.Series("", index=df.index, dtype="object")
-
-    for col in candidates:
-        if col not in df.columns:
-            continue
-
-        raw = df[col].fillna("").astype(str).str.strip()
-        keys = raw.apply(cc_key).fillna("").astype(str).str.strip()
-        keys = keys.mask(keys.str.upper().isin(["", "NAN", "NONE", "<NA>"]), "")
-
-        mask_fill = result.fillna("").astype(str).str.strip().eq("") & keys.ne("")
-        result.loc[mask_fill] = keys.loc[mask_fill]
-
-    # Override explícito por ruta de archivo cuando el path contiene un CC del portafolio.
-    # Esto corrige falsos matches por medidor/no_servicio cuando el recibo pertenece a otro CC.
-    for col in [
-        "file_path",
-        "source_file_path",
-        "file_path diagnóstico",
-        "file_path base",
-        "source_file_path base"
-    ]:
-        if col not in df.columns:
-            continue
-
-        path_keys = df[col].fillna("").astype(str).apply(_inferir_cc_key_desde_texto_largo)
-        mask_path = path_keys.fillna("").astype(str).str.strip().ne("")
-        result.loc[mask_path] = path_keys.loc[mask_path]
-
-    return result.fillna("").astype(str).str.strip()
-
-
-def corregir_cc_por_file_path(df: pd.DataFrame) -> pd.DataFrame:
-    """Corrige columnas de centro comercial cuando file_path contiene un CC inequívoco."""
-    if df is None or df.empty:
-        return df
-
-    out = df.copy()
-    path_keys = pd.Series("", index=out.index, dtype="object")
-
-    for col in ["file_path", "source_file_path", "file_path diagnóstico", "file_path base", "source_file_path base"]:
-        if col not in out.columns:
-            continue
-        keys = out[col].fillna("").astype(str).apply(_inferir_cc_key_desde_texto_largo)
-        mask = path_keys.eq("") & keys.ne("")
-        path_keys.loc[mask] = keys.loc[mask]
-
-    mask_path = path_keys.ne("")
-    if not mask_path.any():
-        return out
-
-    for col in ["_cc_key", "_cc_key_reporte"]:
-        if col in out.columns:
-            out.loc[mask_path, col] = path_keys.loc[mask_path]
-
-    for col in ["_centro_comercial_limpio", "Centro Comercial", "CENTRO COMERCIAL", "NOMBRE DEL CC", "source_sheet", "mall_folder"]:
-        if col in out.columns:
-            out.loc[mask_path, col] = path_keys.loc[mask_path].apply(cc_display_from_key)
-
-    return out
-
-
-def _servicio_sin_ceros_key(series: pd.Series) -> pd.Series:
-    key = normalize_service_cc(series)
-    key = key.fillna("").astype(str).str.strip()
-    sin_ceros = key.str.lstrip("0")
-    return sin_ceros.mask(sin_ceros.eq(""), key)
-
-
-def _preferir_no_servicio_12_digitos(values) -> str:
-    """
-    El match puede usar no_servicio con o sin ceros iniciales.
-    Para mostrar/conservar el no_servicio final, preferimos la versión
-    completa de 12+ dígitos cuando existe dentro del mismo grupo.
-
-    Ejemplo:
-    056190551381 y 56190551381 son el mismo servicio sin ceros iniciales,
-    pero se debe conservar 056190551381 porque tiene 12 dígitos.
-    """
-    candidatos = []
-
-    for value in values:
-        if pd.isna(value):
-            continue
-
-        for part in str(value).replace("|", ",").split(","):
-            s = str(part).strip()
-            if not s or s.upper() in ["NAN", "NONE", "<NA>"]:
-                continue
-
-            s_norm = normalize_service_cc(pd.Series([s])).iloc[0]
-            s_norm = str(s_norm).strip()
-
-            if not s_norm or s_norm.upper() in ["NAN", "NONE", "<NA>"]:
-                continue
-
-            # Solo usamos valores numéricos como no_servicio canónico.
-            if not s_norm.isdigit():
-                continue
-
-            candidatos.append(s_norm)
-
-    if not candidatos:
-        return ""
-
-    # Primero preferir 12+ dígitos. Si hay varios, usar el más largo.
-    candidatos_12 = [s for s in candidatos if len(s) >= 12]
-    if candidatos_12:
-        return sorted(candidatos_12, key=lambda x: (-len(x), x))[0]
-
-    # Si no hay 12 dígitos, usar el más largo disponible.
-    return sorted(candidatos, key=lambda x: (-len(x), x))[0]
-
-
-def _aplicar_no_servicio_canonico_por_grupo(
-    df: pd.DataFrame,
-    group_cols,
-    servicio_cols=None
-) -> pd.DataFrame:
-    """
-    Dentro de cada grupo de servicio equivalente, reemplaza no_servicio por
-    la versión canónica de 12+ dígitos cuando exista. No cambia la llave de
-    match; solo conserva/muestra el valor completo.
-    """
-    if df is None or df.empty:
-        return df
-
-    out = df.copy()
-
-    group_cols = [col for col in group_cols if col in out.columns]
-    if not group_cols:
-        return out
-
-    if servicio_cols is None:
-        servicio_cols = [
-            "parser_no_servicio_match",
-            "no_servicio",
-            "No. servicio",
-            "No servicio",
-            "No. de servicio",
-            "servicio"
-        ]
-
-    servicio_cols = [col for col in servicio_cols if col in out.columns]
-    if not servicio_cols:
-        return out
-
-    # Junta todos los no_servicio disponibles por grupo para elegir el mejor.
-    tmp = out[group_cols + servicio_cols].copy()
-    tmp["_servicios_concat"] = tmp[servicio_cols].astype(str).agg("|".join, axis=1)
-
-    preferidos = (
-        tmp
-        .groupby(group_cols, dropna=False)["_servicios_concat"]
-        .agg(lambda x: _preferir_no_servicio_12_digitos(x.tolist()))
-        .reset_index(name="_no_servicio_preferido_12")
-    )
-
-    out = out.merge(preferidos, on=group_cols, how="left")
-
-    mask_pref = (
-        out["_no_servicio_preferido_12"]
-        .fillna("")
-        .astype(str)
-        .str.strip()
-        .ne("")
-    )
-
-    for col in servicio_cols:
-        mask_col = mask_pref & out[col].notna()
-        # También llenamos si el col está vacío, para que la tabla final tenga
-        # el no_servicio completo cuando el grupo lo conoce.
-        mask_col = mask_pref & (
-            out[col].isna()
-            | out[col].astype(str).str.upper().isin(["", "NAN", "NONE", "<NA>"])
-            | out[col].notna()
-        )
-        out.loc[mask_col, col] = out.loc[mask_col, "_no_servicio_preferido_12"]
-
-    out = out.drop(columns=["_no_servicio_preferido_12"], errors="ignore")
-    return out
-
-
-def deduplicar_benchmark_por_cc_servicio(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Evita duplicados de un mismo servicio dentro de un CC.
-
-    Cuando el mismo recibo aparece con y sin cero inicial en No. servicio,
-    o aparece primero con un match mal asignado y después con el CC correcto,
-    conservamos la fila con mejor información de demanda.
-    """
-    if df is None or df.empty:
-        return df
-
-    out = df.copy()
-
-    servicio_col = first_existing_column(
-        out,
-        ["parser_no_servicio_match", "no_servicio", "No. servicio", "No servicio", "servicio"]
-    )
-    if servicio_col is None:
-        return out
-
-    cc_col = first_existing_column(out, ["_cc_key_reporte", "_cc_key", "_centro_comercial_limpio", "NOMBRE DEL CC", "source_sheet", "mall_folder"])
-    if cc_col is None:
-        return out
-
-    out = corregir_cc_por_file_path(out)
-
-    out["_dedup_cc"] = coalesce_cc_from_columns(
-        out,
-        ["_cc_key_reporte", "_cc_key", "_centro_comercial_limpio", "NOMBRE DEL CC", "source_sheet", "mall_folder", "file_path", "source_file_path"]
-    )
-    out["_dedup_servicio"] = _servicio_sin_ceros_key(out[servicio_col])
-
-    # Si dentro del mismo CC + servicio sin ceros hay una versión de 12 dígitos,
-    # úsala como no_servicio canónico antes de deduplicar.
-    out = _aplicar_no_servicio_canonico_por_grupo(
-        out,
-        group_cols=["_dedup_cc", "_dedup_servicio"],
-        servicio_cols=[
-            "parser_no_servicio_match",
-            "no_servicio",
-            "No. servicio",
-            "No servicio",
-            "servicio"
-        ]
-    )
-
-    demanda_col = first_existing_column(out, ["Demanda máxima anual (kW)", "demanda_maxima_anual_kw", "demanda_benchmark_kw"])
-    area_col = first_existing_column(out, ["Area m2", "area_benchmark_m2", "Área m2"])
-
-    if demanda_col:
-        out["_dedup_demanda"] = pd.to_numeric(out[demanda_col], errors="coerce")
-    else:
-        out["_dedup_demanda"] = pd.NA
-
-    if area_col:
-        out["_dedup_area"] = pd.to_numeric(out[area_col], errors="coerce")
-    else:
-        out["_dedup_area"] = pd.NA
-
-    out["_dedup_tiene_demanda"] = out["_dedup_demanda"].notna() & (out["_dedup_demanda"] > 0)
-    out["_dedup_tiene_area"] = out["_dedup_area"].notna() & (out["_dedup_area"] > 0)
-
-    mask_dedup = (
-        out["_dedup_cc"].fillna("").astype(str).str.strip().ne("")
-        & out["_dedup_servicio"].fillna("").astype(str).str.strip().ne("")
-    )
-
-    sin_llave = out[~mask_dedup].copy()
-    con_llave = out[mask_dedup].copy()
-
-    con_llave = con_llave.sort_values(
-        ["_dedup_cc", "_dedup_servicio", "_dedup_tiene_demanda", "_dedup_demanda", "_dedup_tiene_area"],
-        ascending=[True, True, False, False, False],
-        na_position="last"
-    )
-
-    con_llave = con_llave.drop_duplicates(
-        subset=["_dedup_cc", "_dedup_servicio"],
-        keep="first"
-    )
-
-    out = pd.concat([con_llave, sin_llave], ignore_index=True, sort=False)
-    out = out.drop(
-        columns=["_dedup_cc", "_dedup_servicio", "_dedup_demanda", "_dedup_area", "_dedup_tiene_demanda", "_dedup_tiene_area"],
-        errors="ignore"
-    )
-
-    return out
-
-def cc_display_from_key(value):
-    """Nombre legible para tablas a partir de la llave de CC."""
-    key = cc_key(value)
-    display_map = {
-        "AMBAR FASHION MALL TUXTLA": "Ambar Fashion Mall Tuxtla",
-        "FORUM TLAQUEPAQUE": "Forum Tlaquepaque",
-        "LA ISLA VALLARTA": "La Isla Vallarta",
-        "MIDTOWN JALISCO": "Midtown Jalisco",
-        "MITIKAH": "Mitikah",
-        "OUTLET LERMA": "Outlet Lerma",
-        "PABELLON CUEMANCO": "Pabellón Cuemanco",
-        "ESPACIO AGUASCALIENTES": "Espacio Aguascalientes",
-        "PABELLON RIO DE LOS REMEDIOS": "Pabellón Río de los Remedios",
-        "PABELLON SALINA CRUZ": "Pabellón Salina Cruz",
-        "SENDERO VILLAHERMOSA": "Sendero Villahermosa",
-        "PATIO TOLUCA": "Patio Toluca",
-        "UPTOWN MERIDA": "Uptown Mérida",
-        "ALAIA GUANAJUATO": "Alaia Guanajuato",
-        "ALAIA TAPACHULA": "Alaia Tapachula",
-        "PLAZA CENTRAL": "Plaza Central",
-        "SAMARA SATELITE": "Samara Satélite",
-        "UPTOWN JURIQUILLA": "Uptown Juriquilla",
-        "PABELLON NAVOJOA": "Pabellón Navojoa",
-    }
-    return display_map.get(key, limpiar_nombre_cc(value))
-
-
-def extraer_cc_desde_path(value):
-    """Intenta inferir el centro comercial desde un file_path o texto largo."""
-    if pd.isna(value):
-        return ""
-    txt = str(value).replace("\\", "/")
-    key = cc_key(txt)
-    if key and key.upper() not in ["", "NAN", "NONE", "<NA>"]:
-        return cc_display_from_key(key)
-    return ""
-
-
-def join_unique_debug(values, max_items=3):
-    vals = []
-    for v in values:
-        if pd.isna(v):
-            continue
-        s = str(v).strip()
-        if s.upper() in ["", "NAN", "NONE", "<NA>"]:
-            continue
-        if s not in vals:
-            vals.append(s)
-    if not vals:
-        return pd.NA
-    if len(vals) > max_items:
-        return " | ".join(vals[:max_items]) + f" | +{len(vals)-max_items} más"
-    return " | ".join(vals)
-
-
-@st.cache_data(show_spinner=False)
-def construir_lookup_diagnostico_rescates(
-    pdbt_sig,
-    gdm_sig,
-    full_sig,
-    parks_sig
-):
-    """
-    Construye un lookup por No. de servicio con lo que existe en parser/rescates.
-    Es solo diagnóstico: ayuda a ver si existe kWh/kwmax y en qué archivo.
-    """
-    fuentes = [
-        (PDBT_KWH_RESCUE_CSV, "results_PDBT_full.csv"),
-        (GDM_RESCUE_CSV, "results_AnaTe18Jun_full_schema_v3.csv"),
-        (NEW_PARSER_ROWS_CSV, "results_file_path_table_1_FULL_v1.csv"),
-        (PARKS_HOSPITALITY_RESCUE_CSV, "results_uptown_merida_parks_hospitality_schema_v3.csv"),
-    ]
-
-    frames = []
-
-    for path, fuente in fuentes:
-        try:
-            df = read_csv_safe(path)
-        except Exception:
-            df = pd.DataFrame()
-
-        if df.empty:
-            continue
-
-        no_col = first_existing_column(df, ["no_servicio", "No. servicio", "No servicio", "servicio"])
-        if no_col is None:
-            continue
-
-        out = pd.DataFrame(index=df.index)
-        out["_key_no_servicio_diag"] = normalize_service_cc(df[no_col])
-        out["Fuente diagnóstico"] = fuente
-
-        for src_col, dst_col in [
-            ("tarifa", "Tarifa diagnóstico"),
-            ("Tarifa", "Tarifa diagnóstico"),
-            ("file_path", "file_path diagnóstico"),
-            ("source_file_path", "file_path diagnóstico"),
-            ("cliente_nombre", "Cliente parser/rescate"),
-            ("medidor", "Medidor parser/rescate"),
-            ("periodo_fact", "Periodo diagnóstico"),
-            ("_status", "Status extracción"),
-            ("data_quality_flags", "Flags calidad extracción"),
-            ("extraction_notes", "Notas extracción"),
-        ]:
-            if src_col in df.columns and dst_col not in out.columns:
-                out[dst_col] = df[src_col]
-
-        for src_col, dst_col in [
-            ("kwh_total", "kWh total diagnóstico"),
-            ("kwmax", "kwmax diagnóstico"),
-            ("demanda_contratada_kw", "Demanda contratada diagnóstico"),
-        ]:
-            if src_col in df.columns:
-                out[dst_col] = pd.to_numeric(df[src_col], errors="coerce")
-
-        out = out[out["_key_no_servicio_diag"].fillna("").astype(str).str.strip().ne("")].copy()
-        if not out.empty:
-            frames.append(out)
-
-    if not frames:
-        return pd.DataFrame()
-
-    diag = pd.concat(frames, ignore_index=True, sort=False)
-
-    agg = {
-        "Fuente diagnóstico": ("Fuente diagnóstico", join_unique_debug),
-    }
-
-    for col in [
-        "Tarifa diagnóstico",
-        "file_path diagnóstico",
-        "Cliente parser/rescate",
-        "Medidor parser/rescate",
-        "Periodo diagnóstico",
-        "Status extracción",
-        "Flags calidad extracción",
-        "Notas extracción",
-    ]:
-        if col in diag.columns:
-            agg[col] = (col, join_unique_debug)
-
-    for col in [
-        "kWh total diagnóstico",
-        "kwmax diagnóstico",
-        "Demanda contratada diagnóstico",
-    ]:
-        if col in diag.columns:
-            agg[col] = (col, "max")
-
-    return (
-        diag
-        .groupby("_key_no_servicio_diag", dropna=False)
-        .agg(**agg)
-        .reset_index()
-    )
-
 def first_existing_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
     """
     Returns the first column name that exists in a dataframe.
@@ -2879,277 +2167,12 @@ def format_mxn_per_kwh(x):
         return "—"
     return f"${x:,.2f}"
 
-
-def _format_no_servicio_display(value):
-    """Mantiene números de servicio como texto, sin .0 ni notación científica si ya viene como texto."""
-    if pd.isna(value):
-        return ""
-
-    txt = str(value).strip()
-
-    if txt.upper() in ["", "NAN", "NONE", "<NA>"]:
-        return ""
-
-    # Si viene como 12345.0, quitar .0.
-    txt = re.sub(r"\.0$", "", txt)
-
-    return txt
-
-
-def _format_percent_display(value):
-    if pd.isna(value):
-        return ""
-    txt = str(value).strip().replace(",", "").replace("%", "")
-    num = pd.to_numeric(txt, errors="coerce")
-    if pd.isna(num):
-        return str(value)
-    return f"{num:,.0f}%"
-
-
-def _format_numeric_display(value, decimals=0, prefix="", suffix=""):
-    if pd.isna(value):
-        return ""
-    txt = str(value).strip().replace(",", "").replace("$", "").replace("%", "")
-    num = pd.to_numeric(txt, errors="coerce")
-    if pd.isna(num):
-        return str(value)
-    return f"{prefix}{num:,.{decimals}f}{suffix}"
-
-
-def aplicar_formato_visual_tablas(data: pd.DataFrame) -> pd.DataFrame:
-    """
-    Formato visual universal para tablas de todos los tabs:
-    - % sin decimales
-    - demanda/kW sin decimales
-    - áreas y densidades con 1 decimal
-    - no_servicio como texto sin .0
-    - separador de miles con coma
-    """
-    if data is None or not isinstance(data, pd.DataFrame) or data.empty:
-        return data
-
-    df_fmt = data.copy()
-
-    for col in df_fmt.columns:
-        col_text = str(col)
-        col_low = col_text.lower()
-
-        # No. servicio / servicio eléctrico como texto.
-        if (
-            "no. servicio" in col_low
-            or "no. de servicio" in col_low
-            or "no servicio" in col_low
-            or "número de servicio" in col_low
-            or "numero de servicio" in col_low
-            or "no_servicio" in col_low
-            or col_low.strip() in ["servicio", "servicio cfe"]
-        ):
-            df_fmt[col] = df_fmt[col].apply(_format_no_servicio_display)
-            continue
-
-        # Porcentajes sin decimales.
-        if "%" in col_text or "pct" in col_low or "porcentaje" in col_low or "cobertura" in col_low or "ocupación" in col_low or "ocupacion" in col_low:
-            df_fmt[col] = df_fmt[col].apply(_format_percent_display)
-            continue
-
-        # Densidades con 1 decimal.
-        if "densidad" in col_low:
-            df_fmt[col] = df_fmt[col].apply(lambda v: _format_numeric_display(v, decimals=1))
-            continue
-
-        # Áreas / m² con 1 decimal.
-        if (
-            "área" in col_low
-            or "area" in col_low
-            or "m²" in col_low
-            or "m2" in col_low
-            or "abr" in col_low
-        ):
-            df_fmt[col] = df_fmt[col].apply(lambda v: _format_numeric_display(v, decimals=1))
-            continue
-
-        # En tablas, Demanda máxima anual se muestra con 1 decimal.
-        # Las métricas st.metric se formatean aparte y siguen sin decimales.
-        if (
-            ("demanda máxima anual" in col_low or "demanda maxima anual" in col_low)
-            and "kwh" not in col_low
-        ):
-            df_fmt[col] = df_fmt[col].apply(lambda v: _format_numeric_display(v, decimals=1))
-            continue
-
-        # Demanda / kW sin decimales. Excluir kWh/energía.
-        if (
-            ("demanda" in col_low or "kwmax" in col_low or "(kw)" in col_low or col_low.endswith(" kw"))
-            and "kwh" not in col_low
-        ):
-            df_fmt[col] = df_fmt[col].apply(lambda v: _format_numeric_display(v, decimals=0))
-            continue
-
-        # kWh / consumo sin decimales.
-        if "kwh" in col_low or "consumo" in col_low:
-            df_fmt[col] = df_fmt[col].apply(lambda v: _format_numeric_display(v, decimals=0))
-            continue
-
-        # Facturación / importe / costo con coma. Costo unitario se conserva con 2 decimales.
-        if "costo promedio" in col_low or "mxn/kwh" in col_low:
-            df_fmt[col] = df_fmt[col].apply(lambda v: _format_numeric_display(v, decimals=2, prefix="$"))
-            continue
-
-        if "facturación" in col_low or "facturacion" in col_low or "importe" in col_low or "monto" in col_low:
-            df_fmt[col] = df_fmt[col].apply(lambda v: _format_numeric_display(v, decimals=0, prefix="$"))
-            continue
-
-        # Cualquier columna numérica restante: separador de miles sin decimales si parece entero,
-        # o con 1 decimal si trae decimales reales.
-        if pd.api.types.is_numeric_dtype(df_fmt[col]):
-            serie_num = pd.to_numeric(df_fmt[col], errors="coerce")
-            non_na = serie_num.dropna()
-            if non_na.empty:
-                continue
-            tiene_decimales = ((non_na % 1).abs() > 1e-9).any()
-            dec = 1 if tiene_decimales else 0
-            df_fmt[col] = serie_num.apply(lambda v: _format_numeric_display(v, decimals=dec))
-
-    return df_fmt
-
-
-# Wrapper para que el formato visual aplique en todas las tablas st.dataframe.
-_st_dataframe_original = st.dataframe
-
-def _st_dataframe_formateado(data=None, *args, **kwargs):
-    if isinstance(data, pd.DataFrame):
-        data = aplicar_formato_visual_tablas(data)
-    return _st_dataframe_original(data, *args, **kwargs)
-
-st.dataframe = _st_dataframe_formateado
-
-def calcular_densidad_agregada_w_m2(
-    df: pd.DataFrame,
-    demanda_col: str,
-    area_col: str
-):
-    """
-    Densidad agregada ponderada por área:
-    suma de demanda máxima anual (kW) / suma de área (m²) × 1,000.
-
-    Esta es la métrica correcta para grupos de locales
-    (giro, tarifa, clima, tipo de centro comercial, portafolio, etc.).
-    La densidad individual por local se conserva como demanda/local ÷ m².
-    """
-
-    if df is None or df.empty:
-        return pd.NA
-
-    if demanda_col not in df.columns or area_col not in df.columns:
-        return pd.NA
-
-    demanda = pd.to_numeric(
-        df[demanda_col],
-        errors="coerce"
-    )
-
-    area = pd.to_numeric(
-        df[area_col],
-        errors="coerce"
-    )
-
-    mask = (
-        demanda.notna()
-        & area.notna()
-        & demanda.gt(0)
-        & area.gt(0)
-    )
-
-    if not mask.any():
-        return pd.NA
-
-    area_total = area.loc[mask].sum()
-
-    if pd.isna(area_total) or area_total <= 0:
-        return pd.NA
-
-    return demanda.loc[mask].sum() / area_total * 1000
-
-
-def calcular_demanda_agregada_kw(
-    df: pd.DataFrame,
-    demanda_col: str
-):
-    if df is None or df.empty or demanda_col not in df.columns:
-        return pd.NA
-
-    demanda = pd.to_numeric(
-        df[demanda_col],
-        errors="coerce"
-    )
-
-    demanda = demanda[demanda.notna() & demanda.gt(0)]
-
-    if demanda.empty:
-        return pd.NA
-
-    return demanda.sum()
-
-
-def calcular_area_agregada_m2(
-    df: pd.DataFrame,
-    area_col: str
-):
-    if df is None or df.empty or area_col not in df.columns:
-        return pd.NA
-
-    area = pd.to_numeric(
-        df[area_col],
-        errors="coerce"
-    )
-
-    area = area[area.notna() & area.gt(0)]
-
-    if area.empty:
-        return pd.NA
-
-    return area.sum()
-
-
-
-def clasificar_tension_tarifa_value(value):
-    """
-    Agrupa tarifas en nivel de tensión para benchmark:
-    - MT: GDMTH, GDMTO
-    - BT: PDBT, GDBT
-    - Sin clasificar: cualquier otra tarifa
-    """
-    tarifa = normalize_tarifa_value(value)
-
-    if pd.isna(tarifa):
-        return "Sin clasificar"
-
-    tarifa = str(tarifa).upper().strip()
-
-    if tarifa in ["GDMTH", "GDMTO"]:
-        return "Media Tensión (MT)"
-
-    if tarifa in ["PDBT", "GDBT"]:
-        return "Baja Tensión (BT)"
-
-    return "Sin clasificar"
-
-
-def clasificar_tension_tarifa_series(s):
-    if s is None:
-        return pd.Series(dtype=str)
-
-    return s.apply(clasificar_tension_tarifa_value)
-
-NOTA_DEMANDA_MAXIMA_ANUAL = (
+NOTA_DEMANDA_PROMEDIO_ANUAL = (
     "Nota: Demanda máxima anual (kW) = máxima demanda mensual registrada o estimada "
     "dentro de la ventana anual disponible para cada servicio/local. "
-    "Si el servicio tiene recibos bimestrales, se usan hasta 6 recibos; "
-    "si tiene recibos mensuales, se usan hasta 12 recibos. "
-    "Cuando no existe información de un año completo, la máxima se calcula "
-    "con los recibos disponibles. "
     "Para GDMTH, GDMTO y GDBT se toma el kwmax del parser; "
-    "para PDBT se usa la demanda estimada con perfiles NREL cuando existe información suficiente."
+    "para PDBT se usa la demanda estimada con perfiles NREL cuando existe información suficiente. "
+    "La Demanda promedio anual (kW) se conserva solo como referencia."
 )
 
 def mostrar_pie_composicion_fijo(
@@ -3172,7 +2195,7 @@ def mostrar_pie_composicion_fijo(
     ax.pie(
         valores,
         labels=etiquetas,
-        autopct="%1.0f%%",
+        autopct="%1.1f%%",
         startangle=90,
         radius=1.0,
         labeldistance=1.08,
@@ -3226,7 +2249,7 @@ def mostrar_pie_fijo(
     ax.pie(
         valores,
         labels=None,
-        autopct="%1.0f%%",
+        autopct="%1.1f%%",
         startangle=90,
         radius=1.0,
         pctdistance=0.67,
@@ -3720,32 +2743,14 @@ def aplicar_estimacion_pdbt_nrel_a_parsed(
     # Llaves en muestra validada
     # --------------------------------------------------
 
-    m["_cc_key"] = coalesce_cc_from_columns(
-        m,
-        [
-            "_centro_comercial_limpio",
-            "NOMBRE DEL CC",
-            "CENTRO COMERCIAL",
-            "Centro Comercial",
-            "source_sheet",
-            "mall_folder",
-            "file_path",
-            "source_file_path",
-            "direccion_completa",
-            "direccion_raw"
-        ]
-    )
-
-    if "_centro_comercial_limpio" not in m.columns:
-        m["_centro_comercial_limpio"] = m["_cc_key"].apply(cc_display_from_key)
+    if "_centro_comercial_limpio" in m.columns:
+        m["_cc_key"] = m["_centro_comercial_limpio"].apply(cc_key)
+    elif "NOMBRE DEL CC" in m.columns:
+        m["_cc_key"] = m["NOMBRE DEL CC"].apply(cc_key)
+    elif "source_sheet" in m.columns:
+        m["_cc_key"] = m["source_sheet"].apply(cc_key)
     else:
-        _mask_m_cc_vacio = (
-            m["_centro_comercial_limpio"].fillna("").astype(str).str.strip().isin(["", "nan", "None", "<NA>"])
-            & m["_cc_key"].fillna("").astype(str).str.strip().ne("")
-        )
-        m.loc[_mask_m_cc_vacio, "_centro_comercial_limpio"] = (
-            m.loc[_mask_m_cc_vacio, "_cc_key"].apply(cc_display_from_key)
-        )
+        m["_cc_key"] = ""
 
     general_meter_col = first_existing_column(
         m,
@@ -4322,6 +3327,7 @@ def calcular_demanda_promedio_ultimos_12_meses(parsed: pd.DataFrame) -> pd.DataF
     ).copy()
 
     if base.empty:
+        p["demanda_promedio_anual_kw"] = pd.NA
         p["demanda_maxima_anual_kw"] = pd.NA
         p["meses_con_demanda"] = pd.NA
         p["periodo_12m_inicio"] = pd.NaT
@@ -4453,7 +3459,7 @@ def calcular_demanda_promedio_ultimos_12_meses(parsed: pd.DataFrame) -> pd.DataF
         if demanda_ventana.empty:
             continue
 
-        row["demanda_maxima_anual_kw"] = demanda_ventana.mean()
+        row["demanda_promedio_anual_kw"] = demanda_ventana.mean()
         row["demanda_maxima_anual_kw"] = demanda_ventana.max()
 
         row["recibos_usados_demanda"] = len(demanda_ventana)
@@ -4490,6 +3496,7 @@ def calcular_demanda_promedio_ultimos_12_meses(parsed: pd.DataFrame) -> pd.DataF
     demanda_promedio_12m_df = pd.DataFrame(rows)
 
     if demanda_promedio_12m_df.empty:
+        p["demanda_promedio_anual_kw"] = pd.NA
         p["demanda_maxima_anual_kw"] = pd.NA
         p["meses_con_demanda"] = pd.NA
         p["periodo_12m_inicio"] = pd.NaT
@@ -4503,6 +3510,7 @@ def calcular_demanda_promedio_ultimos_12_meses(parsed: pd.DataFrame) -> pd.DataF
 
     cols_to_drop = [
         col for col in [
+            "demanda_promedio_anual_kw",
             "demanda_maxima_anual_kw",
             "meses_con_demanda",
             "periodo_12m_inicio",
@@ -4538,15 +3546,31 @@ st.markdown(
 
 
 # ============================================================
-# Data paths
+# Sidebar: data paths
 # ============================================================
-# Los archivos se cargan desde las rutas default del proyecto.
-# La visualización de estas rutas se muestra dentro del tab Calidad de Datos,
-# no en el menú lateral.
 
-parsed_path_text = str(DEFAULT_PARSED_CSV)
-historico_path_text = str(DEFAULT_HISTORICO_CSV)
-general_data_path_text = str(DEFAULT_GENERAL_DATA)
+with st.sidebar:
+    st.header("Datos")
+
+    parsed_path_text = st.text_input(
+        "CSV de recibos parseados",
+        value=str(DEFAULT_PARSED_CSV)
+    )
+
+    historico_path_text = st.text_input(
+        "CSV de histórico",
+        value=str(DEFAULT_HISTORICO_CSV)
+    )
+
+    general_data_path_text = st.text_input(
+        "Excel de datos generales",
+        value=str(DEFAULT_GENERAL_DATA)
+    )
+
+    st.caption(
+        "Los dos primeros archivos son generados por `app_scanner.py` / `scanner.py`. "
+        "El tercero contiene datos generales como m², giro, local y medidor."
+    )
 
 
 # ============================================================
@@ -4585,14 +3609,8 @@ parsed = enriquecer_parser_con_archivos_rescate(
     parsed=parsed,
     pdbt_kwh_path=PDBT_KWH_RESCUE_CSV,
     gdm_rescue_path=GDM_RESCUE_CSV,
-    new_rows_path=NEW_PARSER_ROWS_CSV,
-    parks_rescue_path=PARKS_HOSPITALITY_RESCUE_CSV
+    new_rows_path=NEW_PARSER_ROWS_CSV
 )
-
-# Reaplicar override después de agregar filas/rescates.
-# Esto asegura que cualquier fila Iberdrola agregada o enriquecida siga cayendo
-# en Liverpool / Ambar Fashion Mall Tuxtla antes del match y de la demanda.
-parsed = aplicar_override_iberdrola_liverpool(parsed)
 
 # ============================================================
 # Demanda real estándar por tarifa
@@ -4653,33 +3671,171 @@ if parsed.empty:
 
 
 # ============================================================
-# Global filters and merge settings
+# Sidebar filters and merge settings
 # ============================================================
-# Ya no se muestran filtros en el menú lateral. La app trabaja con la base completa.
 
-mall_col = first_existing_column(parsed, ["mall_folder", "mall", "centro_comercial"])
-tenant_col = first_existing_column(parsed, ["recibos_subgroup", "cliente_nombre", "tenant", "locatario"])
-service_col = first_existing_column(parsed, ["no_servicio", "servicio"])
-tariff_col = first_existing_column(parsed, ["tarifa"])
+with st.sidebar:
+    st.header("Filtros")
 
-filtered = parsed.copy()
+    mall_col = first_existing_column(parsed, ["mall_folder", "mall", "centro_comercial"])
+    tenant_col = first_existing_column(parsed, ["recibos_subgroup", "cliente_nombre", "tenant", "locatario"])
+    service_col = first_existing_column(parsed, ["no_servicio", "servicio"])
+    tariff_col = first_existing_column(parsed, ["tarifa"])
 
-use_general_merge = not general_data.empty
-receipt_key_col = first_existing_column(
-    filtered,
-    ["recibos_subgroup", "cliente_nombre", "medidor", "no_servicio", "cuenta"]
-)
-general_key_col = first_existing_column(
-    general_data,
-    ["NOMBRE COMERCIAL", "CLIENTE", "No. De medidor", "No. de medidor", "TARIFA"]
-) if not general_data.empty else None
-area_col = first_existing_column(
-    general_data,
-    [
-        "MTS2", "M2", "m2", "MTS 2", "MTS²", "AREA_M2", "AREA M2",
-        "SUPERFICIE", "SUPERFICIE M2",
-    ]
-) if not general_data.empty else None
+    filtered = parsed.copy()
+
+    if mall_col:
+        malls = sorted([x for x in filtered[mall_col].dropna().unique()])
+
+        use_all_malls = st.checkbox(
+            "Incluir todos los centros comerciales",
+            value=True
+        )
+
+        if use_all_malls:
+            selected_malls = malls
+            st.caption(f"Centros comerciales incluidos: {len(selected_malls)}")
+        else:
+            selected_malls = st.multiselect(
+                "Centro comercial",
+                options=malls,
+                default=[]
+            )
+
+        if selected_malls:
+            filtered = filtered[filtered[mall_col].isin(selected_malls)]
+        else:
+            filtered = filtered.iloc[0:0]
+
+    if tenant_col:
+        tenants = sorted([x for x in filtered[tenant_col].dropna().unique()])
+        selected_tenants = st.multiselect(
+            "Locatario / subgrupo",
+            options=tenants,
+            default=[]
+        )
+        if selected_tenants:
+            filtered = filtered[filtered[tenant_col].isin(selected_tenants)]
+
+    if tariff_col:
+        tariffs = sorted([x for x in filtered[tariff_col].dropna().unique()])
+        selected_tariffs = st.multiselect(
+            "Tarifa",
+            options=tariffs,
+            default=[]
+        )
+        if selected_tariffs:
+            filtered = filtered[filtered[tariff_col].isin(selected_tariffs)]
+
+    if "kwh_total_num" in filtered.columns:
+        kwh_nonnull = filtered["kwh_total_num"].dropna()
+
+        if not kwh_nonnull.empty:
+            st.markdown("#### Rango de kWh")
+
+            use_compact_kwh_slider = st.checkbox(
+                "Usar escala compacta para kWh",
+                value=True,
+                help=(
+                    "Usa el percentil 99 como máximo visual para evitar que valores "
+                    "extremos hagan poco útil el control deslizante."
+                )
+            )
+
+            min_kwh = float(kwh_nonnull.min())
+            absolute_max_kwh = float(kwh_nonnull.max())
+
+            if use_compact_kwh_slider and len(kwh_nonnull) > 10:
+                visual_max_kwh = float(kwh_nonnull.quantile(0.99))
+                visual_max_kwh = max(visual_max_kwh, min_kwh)
+            else:
+                visual_max_kwh = absolute_max_kwh
+
+            selected_kwh_range = st.slider(
+                "Rango de kWh por recibo",
+                min_value=float(min_kwh),
+                max_value=float(visual_max_kwh),
+                value=(float(min_kwh), float(visual_max_kwh))
+            )
+
+            filtered = filtered[
+                (filtered["kwh_total_num"].isna()) |
+                (
+                    (filtered["kwh_total_num"] >= selected_kwh_range[0]) &
+                    (filtered["kwh_total_num"] <= selected_kwh_range[1])
+                )
+            ]
+
+            if use_compact_kwh_slider and visual_max_kwh < absolute_max_kwh:
+                st.caption(
+                    f"Máximo real en los datos: {absolute_max_kwh:,.0f} kWh. "
+                    f"Máximo visual usado: {visual_max_kwh:,.0f} kWh."
+                )
+
+    st.header("Cruce con datos generales")
+
+    use_general_merge = False
+    receipt_key_col = None
+    general_key_col = None
+    area_col = None
+
+    if general_data.empty:
+        st.warning("No se cargó el archivo de datos generales.")
+    else:
+        use_general_merge = st.checkbox(
+            "Activar cruce con datos generales",
+            value=True
+        )
+
+        if use_general_merge:
+            receipt_options = list(filtered.columns)
+            general_options = list(general_data.columns)
+
+            receipt_key_candidates = [
+                "recibos_subgroup",
+                "cliente_nombre",
+                "medidor",
+                "no_servicio",
+                "cuenta",
+            ]
+
+            general_key_candidates = [
+                "NOMBRE COMERCIAL",
+                "CLIENTE",
+                "No. De medidor",
+                "No. de medidor",
+                "TARIFA",
+            ]
+
+            area_candidates = [
+                "MTS2",
+                "M2",
+                "m2",
+                "MTS 2",
+                "MTS²",
+                "AREA_M2",
+                "AREA M2",
+                "SUPERFICIE",
+                "SUPERFICIE M2",
+            ]
+
+            receipt_key_col = st.selectbox(
+                "Llave en recibos",
+                options=receipt_options,
+                index=preferred_col_index(receipt_options, receipt_key_candidates)
+            )
+
+            general_key_col = st.selectbox(
+                "Llave en datos generales",
+                options=general_options,
+                index=preferred_col_index(general_options, general_key_candidates)
+            )
+
+            area_col = st.selectbox(
+                "Columna de superficie",
+                options=general_options,
+                index=preferred_col_index(general_options, area_candidates)
+            )
 # ============================================================
 # Enriched data: recibos + datos generales
 # ============================================================
@@ -4840,7 +3996,7 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
     Construye la muestra validada de locales ocupados con recibo
     antes de renderizar los tabs.
 
-    Esta funci├│n replica la l├│gica base de Calidad de Datos:
+    Esta función replica la lógica base de Calidad de Datos:
     - mismo centro comercial
     - match por medidor
     - match por cliente
@@ -4890,7 +4046,7 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
         # Llaves normalizadas del parser para guardar el match original
         # --------------------------------------------------
         # Importante: antes solo se creaban sets de medidor/cliente/nombre,
-        # pero no columnas dentro de parser_cc. Por eso despu├®s no se pod├¡a
+        # pero no columnas dentro de parser_cc. Por eso después no se podía
         # copiar tarifa/medidor/no_servicio desde el parser original.
 
         parser_cc["_key_medidor"] = (
@@ -5016,7 +4172,7 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
         )
 
         # --------------------------------------------------
-        # Match por n├║mero de local en direcci├│n/textos del parser
+        # Match por número de local en dirección/textos del parser
         # --------------------------------------------------
 
         general_local_col = first_existing_column(
@@ -5153,7 +4309,7 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
                 criterios.append("Nombre comercial")
 
             if row["_match_no_local_direccion"]:
-                criterios.append("No. local / direcci├│n")
+                criterios.append("No. local / dirección")
 
             if row["_match_medidor"]:
                 criterios.append("Medidor")
@@ -5168,9 +4324,9 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
         )
 
         # --------------------------------------------------
-        # Guardar informaci├│n del parser que origin├│ el match
+        # Guardar información del parser que originó el match
         # --------------------------------------------------
-        # Esto evita que despu├®s, en Densidad de demanda,
+        # Esto evita que después, en Densidad de demanda,
         # tengamos que volver a adivinar contra el parser.
 
         parser_cols_match = [
@@ -5203,43 +4359,6 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
             if col not in general_ocupados_cc.columns:
                 general_ocupados_cc[col] = pd.NA
 
-        def _match_parser_incompleto(mask):
-            """
-            Permite que un criterio posterior mejore un match anterior incompleto.
-
-            Caso típico: el medidor encontró una fila del parser sin no_servicio
-            o sin file_path útil, pero el mismo local sí puede resolverse por
-            cliente/nombre/local contra otras filas del parser. Antes se bloqueaba
-            porque parser_tarifa_match ya no estaba vacío.
-            """
-            if mask is None:
-                return mask
-
-            m = mask.copy()
-
-            tarifa_vacia = (
-                general_ocupados_cc["parser_tarifa_match"].isna()
-                | general_ocupados_cc["parser_tarifa_match"].astype(str).str.strip().str.upper().isin(
-                    ["", "NAN", "NONE", "<NA>", "SIN TARIFA"]
-                )
-            )
-
-            servicio_vacio = (
-                general_ocupados_cc["parser_no_servicio_match"].isna()
-                | general_ocupados_cc["parser_no_servicio_match"].astype(str).str.strip().str.upper().isin(
-                    ["", "NAN", "NONE", "<NA>"]
-                )
-            )
-
-            file_vacio = (
-                general_ocupados_cc["parser_file_match"].isna()
-                | general_ocupados_cc["parser_file_match"].astype(str).str.strip().str.upper().isin(
-                    ["", "NAN", "NONE", "<NA>"]
-                )
-            )
-
-            return m & (tarifa_vacia | servicio_vacio | file_vacio)
-
         def copiar_parser_match_a_general(mask_general, mask_parser, criterio):
             if not mask_general.any() or not mask_parser.any():
                 return
@@ -5254,9 +4373,9 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
             # --------------------------------------------------
             # Si encontramos una fila del parser por medidor, cliente,
             # nombre comercial o local, primero identificamos su no_servicio
-            # y despu├®s traemos TODAS las filas de ese mismo no_servicio.
+            # y después traemos TODAS las filas de ese mismo no_servicio.
             #
-            # Esto permite capturar cambios durante el a├▒o:
+            # Esto permite capturar cambios durante el año:
             # - varios medidores para el mismo no_servicio
             # - varios cliente_nombre para el mismo no_servicio
             # - varios recibos_subgroup para el mismo no_servicio
@@ -5297,10 +4416,10 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
             # Eso NO significa que todos correspondan al mismo local de DG.
             #
             # Si el criterio es amplio, intentamos desambiguar con:
-            # 1. NOMBRE COMERCIAL contra file_path / direcci├│n / file_name
-            # 2. No. local contra file_path / direcci├│n / file_name
+            # 1. NOMBRE COMERCIAL contra file_path / dirección / file_name
+            # 2. No. local contra file_path / dirección / file_name
             #
-            # Si despu├®s de eso siguen quedando varios no_servicio,
+            # Si después de eso siguen quedando varios no_servicio,
             # NO copiamos nada para evitar asignar un servicio incorrecto.
 
             if criterio in [
@@ -5405,7 +4524,7 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
 
                         else:
                             # ------------------------------------------
-                            # 2) Desempate por No. local / direcci├│n
+                            # 2) Desempate por No. local / dirección
                             # ------------------------------------------
 
                             if (
@@ -5616,7 +4735,7 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
                 mask_general = general_ocupados_cc["_key_cliente"].astype(str).eq(key)
                 mask_parser = parser_cc["_key_cliente"].astype(str).eq(key)
 
-                mask_general = _match_parser_incompleto(mask_general)
+                mask_general = mask_general & general_ocupados_cc["parser_tarifa_match"].isna()
 
                 copiar_parser_match_a_general(
                     mask_general=mask_general,
@@ -5635,7 +4754,7 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
                 mask_general = general_ocupados_cc["_key_nombre_comercial"].astype(str).eq(key)
                 mask_parser = parser_cc["_key_nombre"].astype(str).eq(key)
 
-                mask_general = _match_parser_incompleto(mask_general)
+                mask_general = mask_general & general_ocupados_cc["parser_tarifa_match"].isna()
 
                 copiar_parser_match_a_general(
                     mask_general=mask_general,
@@ -5651,14 +4770,21 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
         # exactamente igual. Por eso algunos locales quedan con _tiene_recibo=True
         # pero sin parser_tarifa_match.
         #
-        # Aqu├¡ buscamos nuevamente el parser con la misma l├│gica flexible y copiamos
+        # Aquí buscamos nuevamente el parser con la misma lógica flexible y copiamos
         # no_servicio, medidor, tarifa_norm, file_path, etc.
 
         # 1) Copiar datos del parser por cliente flexible
         if "_key_cliente" in general_ocupados_cc.columns and "_key_cliente" in parser_cc.columns:
 
             candidatos_cliente_flexible = general_ocupados_cc[
-                _match_parser_incompleto(general_ocupados_cc["_match_cliente"])
+                general_ocupados_cc["_match_cliente"]
+                & (
+                    general_ocupados_cc["parser_tarifa_match"].isna()
+                    | general_ocupados_cc["parser_tarifa_match"]
+                    .astype(str)
+                    .str.upper()
+                    .isin(["", "NAN", "NONE", "<NA>", "SIN TARIFA"])
+                )
             ].copy()
 
             for idx_general, row_general in candidatos_cliente_flexible.iterrows():
@@ -5695,7 +4821,14 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
         if "_key_nombre_comercial" in general_ocupados_cc.columns and "_key_nombre" in parser_cc.columns:
 
             candidatos_nombre_flexible = general_ocupados_cc[
-                _match_parser_incompleto(general_ocupados_cc["_match_nombre_comercial"])
+                general_ocupados_cc["_match_nombre_comercial"]
+                & (
+                    general_ocupados_cc["parser_tarifa_match"].isna()
+                    | general_ocupados_cc["parser_tarifa_match"]
+                    .astype(str)
+                    .str.upper()
+                    .isin(["", "NAN", "NONE", "<NA>", "SIN TARIFA"])
+                )
             ].copy()
 
             for idx_general, row_general in candidatos_nombre_flexible.iterrows():
@@ -5729,10 +4862,10 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
                 )
 
         # --------------------------------------------------
-        # Match por No. local / direcci├│n para copiar datos del parser
+        # Match por No. local / dirección para copiar datos del parser
         # --------------------------------------------------
-        # Ya usamos No. local / direcci├│n para marcar _tiene_recibo.
-        # Aqu├¡ copiamos tambi├®n los datos reales del parser:
+        # Ya usamos No. local / dirección para marcar _tiene_recibo.
+        # Aquí copiamos también los datos reales del parser:
         # no_servicio, medidor, tarifa_norm, file_path, etc.
         #
         # Esto evita que un local entre como "con recibo" pero quede
@@ -5757,7 +4890,14 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
         ):
 
             candidatos_local = general_ocupados_cc[
-                _match_parser_incompleto(general_ocupados_cc["_match_no_local_direccion"])
+                general_ocupados_cc["_match_no_local_direccion"]
+                & (
+                    general_ocupados_cc["parser_tarifa_match"].isna()
+                    | general_ocupados_cc["parser_tarifa_match"]
+                    .astype(str)
+                    .str.upper()
+                    .isin(["", "NAN", "NONE", "<NA>", "SIN TARIFA"])
+                )
             ].copy()
 
             for idx_general, row_general in candidatos_local.iterrows():
@@ -5806,7 +4946,7 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
                 copiar_parser_match_a_general(
                     mask_general=mask_general_local,
                     mask_parser=mask_parser_local,
-                    criterio="No. local / direcci├│n original"
+                    criterio="No. local / dirección original"
                 )
 
         # --------------------------------------------------
@@ -5816,7 +4956,7 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
         # no tiene tarifa para todos los CCs ni para todos los clientes.
         #
         # Esta columna queda guardada en muestra_con_recibo_global y debe
-        # ser la fuente ├║nica para composici├│n, densidad y demanda.
+        # ser la fuente única para composición, densidad y demanda.
 
         general_ocupados_cc["TARIFA_FINAL"] = pd.NA
 
@@ -5879,17 +5019,17 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
         # Evitar que un mismo no_servicio cuente para varios locales
         # --------------------------------------------------
         # Regla:
-        # Un no_servicio del parser representa un servicio/local el├®ctrico.
+        # Un no_servicio del parser representa un servicio/local eléctrico.
         # Por lo tanto, dentro de un mismo centro comercial, un no_servicio
         # solo puede quedar asignado a UN local ocupado de DG.
         #
-        # Si el mismo no_servicio qued├│ copiado a varios locales por un match
-        # amplio de CLIENTE o NOMBRE COMERCIAL, conservamos el match m├ís fuerte
-        # y limpiamos los dem├ís.
+        # Si el mismo no_servicio quedó copiado a varios locales por un match
+        # amplio de CLIENTE o NOMBRE COMERCIAL, conservamos el match más fuerte
+        # y limpiamos los demás.
         #
         # Esto corrige casos como:
         # - ITX RETAIL MEXICO SA DE CV
-        #   donde Bershka / Stradivarius s├¡ tienen recibo,
+        #   donde Bershka / Stradivarius sí tienen recibo,
         #   pero Pull & Bear no debe tomar esos mismos no_servicio.
         #
         # - Coppel / Burger King / etc.
@@ -5954,11 +5094,11 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
 
         def score_match_local(row):
             """
-            Puntaje para decidir qu├® local se queda con un no_servicio duplicado.
+            Puntaje para decidir qué local se queda con un no_servicio duplicado.
 
             Prioridad:
             1. Medidor exacto DG-parser
-            2. No. local aparece en file_path/direcci├│n
+            2. No. local aparece en file_path/dirección
             3. Nombre comercial exacto DG-parser
             4. Match por nombre comercial
             5. Match por cliente
@@ -5983,7 +5123,7 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
             if "MEDIDOR" in criterio or "MEDIDOR" in criterio_original:
                 score += 700
 
-            # 2) No. local en direcci├│n / file_path
+            # 2) No. local en dirección / file_path
             no_local_val = (
                 row.get(general_local_col, "")
                 if general_local_col
@@ -6001,8 +5141,35 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
             ):
                 score += 500
 
-            if "LOCAL" in criterio or "DIRECCION" in criterio or "DIRECCI├ôN" in criterio:
+            if "LOCAL" in criterio or "DIRECCION" in criterio or "DIRECCIÓN" in criterio:
                 score += 400
+
+            # 2.5) Nombre comercial aparece en textos del parser
+            # Esto corrige casos donde el no_servicio quedó asignado
+            # por CLIENTE corporativo a otro local, pero el file_path
+            # claramente contiene la marca correcta.
+            nombre_comercial_raw = (
+                row.get("NOMBRE COMERCIAL", "")
+                if "NOMBRE COMERCIAL" in row.index
+                else ""
+            )
+
+            textos_parser_nombre = [
+                row.get("parser_file_match", ""),
+                row.get("parser_direccion_match", ""),
+                row.get("parser_recibos_subgroup_match", "")
+            ]
+
+            if (
+                pd.notna(nombre_comercial_raw)
+                and str(nombre_comercial_raw).strip() != ""
+                and any(
+                    has_partial_match_cc(nombre_comercial_raw, [texto_parser])
+                    for texto_parser in textos_parser_nombre
+                    if pd.notna(texto_parser)
+                )
+            ):
+                score += 650
 
             # 3) Nombre comercial exacto
             nombre_dg_key = (
@@ -6124,8 +5291,8 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
                     f"no_servicio {servicio_dup} ya asignado a otro local"
                 )
 
-        # Si despu├®s de limpiar un local qued├│ con varios no_servicio
-        # y no fue match por medidor, tambi├®n lo limpiamos.
+        # Si después de limpiar un local quedó con varios no_servicio
+        # y no fue match por medidor, también lo limpiamos.
         # Un match amplio que trae varios servicios no es confiable.
         if "parser_no_servicio_match" in general_ocupados_cc.columns:
             for idx_multi, row_multi in general_ocupados_cc.iterrows():
@@ -6151,7 +5318,7 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
                     or "MEDIDOR" in criterio_original_multi
                     or "LOCAL" in criterio_multi
                     or "DIRECCION" in criterio_multi
-                    or "DIRECCI├ôN" in criterio_multi
+                    or "DIRECCIÓN" in criterio_multi
                 )
 
                 if not es_match_fuerte:
@@ -6163,14 +5330,14 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
         # --------------------------------------------------
         # Segunda pasada: rescatar matches seguros no asignados
         # --------------------------------------------------
-        # Despu├®s de limpiar duplicados, intentamos recuperar locales
+        # Después de limpiar duplicados, intentamos recuperar locales
         # que quedaron sin parser asignado.
         #
         # Solo hacemos match si encontramos EXACTAMENTE un no_servicio
         # disponible en el parser.
         #
         # Reglas de rescate:
-        # 1. No. de local aparece en file_path / direcci├│n / nombre del archivo.
+        # 1. No. de local aparece en file_path / dirección / nombre del archivo.
         # 2. Nombre comercial exacto y no ambiguo.
         #
         # No usamos CLIENTE solo, porque puede agrupar varias marcas
@@ -6318,7 +5485,7 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
                 continue
 
             # ----------------------------------------------
-            # 1) Rescate por No. de Local en file_path/direcci├│n
+            # 1) Rescate por No. de Local en file_path/dirección
             # ----------------------------------------------
 
             if general_local_col and parser_text_cols_rescate:
@@ -6361,7 +5528,7 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
                     if asignar_rescate_si_unico(
                         idx_local=idx_rescate,
                         servicios=servicios_local_rescate,
-                        criterio="Rescate por No. local ├║nico en parser"
+                        criterio="Rescate por No. local único en parser"
                     ):
                         continue
 
@@ -6398,12 +5565,12 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
                     if asignar_rescate_si_unico(
                         idx_local=idx_rescate,
                         servicios=servicios_nombre_rescate,
-                        criterio="Rescate por nombre comercial exacto ├║nico"
+                        criterio="Rescate por nombre comercial exacto único"
                     ):
                         continue
 
-        # Despu├®s del rescate, volvemos a limpiar duplicados por si alg├║n
-        # no_servicio qued├│ asignado dos veces accidentalmente.
+        # Después del rescate, volvemos a limpiar duplicados por si algún
+        # no_servicio quedó asignado dos veces accidentalmente.
         servicio_a_indices_post_rescate = {}
 
         if "parser_no_servicio_match" in general_ocupados_cc.columns:
@@ -6455,21 +5622,24 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
             if indices_perdedores:
                 limpiar_match_parser_en_indices(
                     indices_perdedores,
-                    f"no_servicio {servicio_dup} duplicado despu├®s de rescate"
+                    f"no_servicio {servicio_dup} duplicado después de rescate"
                 )
 
         # --------------------------------------------------
-        # Confirmar match con fila real del parser
+        # Decisión final de muestra global con recibo
         # --------------------------------------------------
-        # Un local NO debe contar como "con recibo" solo porque
-        # coincidi├│ por CLIENTE o NOMBRE COMERCIAL de forma amplia.
+        # Objetivo:
+        # - No usar solo "_tiene_recibo_confirmado", porque baja demasiado la muestra.
+        # - No usar todo "_tiene_recibo" amplio, porque mete falsos positivos.
+        # - Usar una muestra intermedia:
+        #   1) locales con parser realmente asignado
+        #   2) matches fuertes por medidor
+        #   3) matches fuertes por no. local / dirección
         #
-        # Debe contar como con recibo ├║nicamente si el match logr├│ copiar
-        # informaci├│n concreta del parser:
-        # - no_servicio
-        # - medidor
-        # - tarifa
-        # - file_path
+        # Importante:
+        # El match por CLIENTE por sí solo NO se considera suficiente.
+        # El match por NOMBRE COMERCIAL sí ayuda, pero solo cuando logró
+        # copiar algo concreto del parser.
 
         def valor_parser_valido(df, col):
             if col not in df.columns:
@@ -6486,7 +5656,8 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
                     "NAN",
                     "NONE",
                     "<NA>",
-                    "SIN TARIFA"
+                    "SIN TARIFA",
+                    "SIN TARIFA / SIN DEMANDA ASOCIADA"
                 ])
             )
 
@@ -6494,162 +5665,59 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
             general_ocupados_cc["_tiene_recibo"]
         )
 
-        general_ocupados_cc["_tiene_recibo_confirmado"] = (
+        tiene_parser_asignado = (
             valor_parser_valido(general_ocupados_cc, "parser_no_servicio_match")
             | valor_parser_valido(general_ocupados_cc, "parser_medidor_match")
             | valor_parser_valido(general_ocupados_cc, "parser_tarifa_match")
             | valor_parser_valido(general_ocupados_cc, "parser_file_match")
         )
 
-        # --------------------------------------------------
-        # Matches amplios no confirmados
-        # --------------------------------------------------
-        # Primero marcamos como no confirmados los locales que parec├¡an
-        # tener recibo por cliente/nombre/medidor/local, pero a los que
-        # NO se les copi├│ informaci├│n concreta del parser.
-        #
-        # Despu├®s refinamos:
-        # Si el ├║nico candidato disponible en parser ya fue asignado a
-        # otro local confirmado, entonces este local NO debe aparecer
-        # como "match amplio no confirmado".
-        #
-        # Ejemplo:
-        # CLIENTE = ITX RETAIL MEXICO SA DE CV
-        # - Bershka ya tom├│ no_servicio X
-        # - Stradivarius ya tom├│ no_servicio Y
-        # - Pull & Bear no tiene no_servicio propio en parser
-        #
-        # Entonces Pull & Bear debe quedar como:
-        # Local ocupado sin recibo confirmado.
-
-        general_ocupados_cc["_match_no_confirmado"] = (
-            general_ocupados_cc["_tiene_recibo_original"]
-            & ~general_ocupados_cc["_tiene_recibo_confirmado"]
+        match_fuerte_directo = (
+            general_ocupados_cc["_match_medidor"].fillna(False)
+            | general_ocupados_cc["_match_no_local_direccion"].fillna(False)
         )
 
-        def split_servicios_match(value):
-            if pd.isna(value):
-                return []
+        match_nombre_con_parser = (
+            general_ocupados_cc["_match_nombre_comercial"].fillna(False)
+            & tiene_parser_asignado
+        )
 
-            servicios = []
+        # --------------------------------------------------
+        # Regla final conservadora
+        # --------------------------------------------------
+        # Para evitar contar locales de más:
+        # - NO basta con que haya match por cliente.
+        # - NO basta con que haya match por nombre comercial.
+        # - NO basta con que el no. local aparezca en algún texto.
+        # - SÍ debe existir un dato concreto copiado desde el parser.
+        #
+        # La mejor evidencia es parser_no_servicio_match.
+        # Aceptamos también medidor/tarifa/file del parser como respaldo,
+        # pero ya no contamos "match fuerte sin parser".
 
-            for raw in str(value).split("|"):
-                raw = raw.strip()
+        tiene_no_servicio_parser = valor_parser_valido(
+            general_ocupados_cc,
+            "parser_no_servicio_match"
+        )
 
-                if raw.upper() in ["", "NAN", "NONE", "<NA>"]:
-                    continue
-
-                key = normalize_service_cc(pd.Series([raw])).iloc[0]
-
-                if key and key.upper() not in ["", "NAN", "NONE", "<NA>"]:
-                    servicios.append(key)
-
-            return sorted(set(servicios))
-
-        # Servicios que ya fueron asignados a locales confirmados.
-        servicios_ya_asignados = set()
-
-        if "parser_no_servicio_match" in general_ocupados_cc.columns:
-            for value in general_ocupados_cc.loc[
-                general_ocupados_cc["_tiene_recibo_confirmado"],
-                "parser_no_servicio_match"
-            ].dropna().astype(str):
-                servicios_ya_asignados.update(
-                    split_servicios_match(value)
+        general_ocupados_cc["_tiene_recibo"] = (
+            tiene_no_servicio_parser
+            | (
+                tiene_parser_asignado
+                & (
+                    general_ocupados_cc["_match_medidor"].fillna(False)
+                    | general_ocupados_cc["_match_no_local_direccion"].fillna(False)
+                    | general_ocupados_cc["_match_nombre_comercial"].fillna(False)
                 )
-
-        def servicios_candidatos_parser_para_local(row):
-            """
-            Regresa los no_servicio candidatos del parser para este local,
-            usando cliente y nombre comercial.
-
-            Esta funci├│n NO confirma match.
-            Solo sirve para saber si todav├¡a hay alg├║n no_servicio disponible
-            que no haya sido usado por otro local confirmado.
-            """
-
-            if parser_cc.empty or "no_servicio" not in parser_cc.columns:
-                return set()
-
-            mask_candidato = pd.Series(False, index=parser_cc.index)
-
-            # Candidatos por CLIENTE exacto normalizado
-            if (
-                "_key_cliente" in parser_cc.columns
-                and "_key_cliente" in general_ocupados_cc.columns
-            ):
-                cliente_key = row.get("_key_cliente", "")
-
-                if pd.notna(cliente_key) and str(cliente_key).strip() != "":
-                    mask_candidato = (
-                        mask_candidato
-                        | parser_cc["_key_cliente"].astype(str).eq(
-                            str(cliente_key)
-                        )
-                    )
-
-            # Candidatos por NOMBRE COMERCIAL exacto normalizado
-            if (
-                "_key_nombre" in parser_cc.columns
-                and "_key_nombre_comercial" in general_ocupados_cc.columns
-            ):
-                nombre_key = row.get("_key_nombre_comercial", "")
-
-                if pd.notna(nombre_key) and str(nombre_key).strip() != "":
-                    mask_candidato = (
-                        mask_candidato
-                        | parser_cc["_key_nombre"].astype(str).eq(
-                            str(nombre_key)
-                        )
-                    )
-
-            candidatos = parser_cc.loc[
-                mask_candidato,
-                "no_servicio"
-            ]
-
-            servicios = set()
-
-            for value in candidatos.dropna().astype(str):
-                servicios.update(
-                    split_servicios_match(value)
-                )
-
-            return servicios
-
-        # Revisar cada match no confirmado:
-        # si todos sus servicios candidatos ya est├ín asignados a otros locales,
-        # entonces no es un "match no confirmado"; es simplemente un local sin recibo.
-        for idx_no_conf, row_no_conf in general_ocupados_cc[
-            general_ocupados_cc["_match_no_confirmado"]
-        ].iterrows():
-
-            servicios_candidatos = servicios_candidatos_parser_para_local(
-                row_no_conf
             )
+        )
 
-            servicios_disponibles = (
-                servicios_candidatos - servicios_ya_asignados
-            )
-
-            if not servicios_candidatos or not servicios_disponibles:
-                general_ocupados_cc.loc[
-                    idx_no_conf,
-                    "_match_no_confirmado"
-                ] = False
-
-                general_ocupados_cc.loc[
-                    idx_no_conf,
-                    "criterio_match"
-                ] = (
-                    str(
-                        general_ocupados_cc.loc[
-                            idx_no_conf,
-                            "criterio_match"
-                        ]
-                    )
-                    + " | SIN RECIBO CONFIRMADO"
-                )
+        # Diagnóstico: los que entraban por match amplio pero no pasan la
+        # decisión final quedan como no confirmados.
+        general_ocupados_cc["_match_no_confirmado"] = (
+            general_ocupados_cc["_tiene_recibo_original"].fillna(False)
+            & ~general_ocupados_cc["_tiene_recibo"].fillna(False)
+        )
 
         general_ocupados_cc.loc[
             general_ocupados_cc["_match_no_confirmado"],
@@ -6662,16 +5730,39 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
             + " | NO CONFIRMADO"
         )
 
-        # A partir de aqu├¡, la muestra global usa solo matches confirmados.
-        general_ocupados_cc["_tiene_recibo"] = (
-            general_ocupados_cc["_tiene_recibo_confirmado"]
+        general_ocupados_cc.loc[
+            general_ocupados_cc["_tiene_recibo"] & tiene_parser_asignado,
+            "criterio_match"
+        ] = (
+            general_ocupados_cc.loc[
+                general_ocupados_cc["_tiene_recibo"] & tiene_parser_asignado,
+                "criterio_match"
+            ].astype(str)
+            + " | PARSER ASIGNADO"
+        )
+
+        general_ocupados_cc.loc[
+            (
+                general_ocupados_cc["_tiene_recibo"]
+                & tiene_no_servicio_parser
+            ),
+            "criterio_match"
+        ] = (
+            general_ocupados_cc.loc[
+                (
+                    general_ocupados_cc["_tiene_recibo"]
+                    & tiene_no_servicio_parser
+                ),
+                "criterio_match"
+            ].astype(str)
+            + " | NO_SERVICIO ASIGNADO"
         )
 
         # --------------------------------------------------
-        # Diagn├│stico global de TARIFA_FINAL
+        # Diagnóstico global de TARIFA_FINAL
         # --------------------------------------------------
-        # No lo mostramos aqu├¡ porque esta funci├│n corre antes de los tabs.
-        # Lo guardamos para mostrarlo despu├®s dentro de Calidad de Datos.
+        # No lo mostramos aquí porque esta función corre antes de los tabs.
+        # Lo guardamos para mostrarlo después dentro de Calidad de Datos.
 
         debug_sin_tarifa_global = general_ocupados_cc[
             general_ocupados_cc["_match_no_confirmado"]
@@ -6684,7 +5775,7 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
             )
 
             # Columna auxiliar para revisar no_servicio en el debug.
-            # Prioriza el no_servicio copiado desde parser, pero tambi├®n
+            # Prioriza el no_servicio copiado desde parser, pero también
             # revisa posibles columnas de DG si existieran.
 
             posibles_cols_no_servicio_debug = [
@@ -6739,7 +5830,7 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
             # Candidatos encontrados en parser
             # --------------------------------------------------
             # Para los locales que hicieron match por cliente/nombre,
-            # mostramos qu├® registros parecidos existen en el parser.
+            # mostramos qué registros parecidos existen en el parser.
             # Esto ayuda a saber si el dato no existe o si no lo estamos jalando.
 
             def join_unique_debug_values(serie):
@@ -6766,7 +5857,10 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
                 "PARSER_NO_SERVICIO_CANDIDATO",
                 "PARSER_MEDIDOR_CANDIDATO",
                 "PARSER_TARIFA_CANDIDATO",
-                "PARSER_FILE_CANDIDATO"
+                "PARSER_FILE_CANDIDATO",
+                "NO_SERVICIO_ASIGNADO_A_CLIENTE",
+                "NO_SERVICIO_ASIGNADO_A_NOMBRE_COMERCIAL",
+                "NO_SERVICIO_ASIGNADO_A_LOCAL"
             ]:
                 debug_sin_tarifa_global[col_debug_parser] = pd.NA
 
@@ -6845,6 +5939,78 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
                         parser_candidatos["no_servicio"]
                     )
 
+                # --------------------------------------------------
+                # Revisar si el no_servicio candidato ya fue asignado
+                # a otro local de Datos Generales
+                # --------------------------------------------------
+                servicio_candidato_debug = debug_sin_tarifa_global.loc[
+                    idx_debug,
+                    "PARSER_NO_SERVICIO_CANDIDATO"
+                ]
+
+                if (
+                    pd.notna(servicio_candidato_debug)
+                    and str(servicio_candidato_debug).strip() != ""
+                    and "parser_no_servicio_match" in general_ocupados_cc.columns
+                ):
+                    servicios_debug = [
+                        normalize_service_cc(pd.Series([x.strip()])).iloc[0]
+                        for x in str(servicio_candidato_debug).split("|")
+                        if str(x).strip().upper() not in ["", "NAN", "NONE", "<NA>"]
+                    ]
+
+                    parser_servicios_asignados = (
+                        general_ocupados_cc["parser_no_servicio_match"]
+                        .fillna("")
+                        .astype(str)
+                    )
+
+                    mask_asignado_debug = parser_servicios_asignados.apply(
+                        lambda value: any(
+                            servicio in [
+                                normalize_service_cc(pd.Series([raw.strip()])).iloc[0]
+                                for raw in str(value).split("|")
+                                if str(raw).strip().upper() not in ["", "NAN", "NONE", "<NA>"]
+                            ]
+                            for servicio in servicios_debug
+                        )
+                    )
+
+                    asignados_debug = general_ocupados_cc.loc[
+                        mask_asignado_debug
+                    ].copy()
+
+                    if not asignados_debug.empty:
+                        debug_sin_tarifa_global.loc[
+                            idx_debug,
+                            "NO_SERVICIO_ASIGNADO_A_CLIENTE"
+                        ] = " | ".join(
+                            asignados_debug.get("CLIENTE", pd.Series(dtype=str))
+                            .dropna()
+                            .astype(str)
+                            .unique()
+                        )
+
+                        debug_sin_tarifa_global.loc[
+                            idx_debug,
+                            "NO_SERVICIO_ASIGNADO_A_NOMBRE_COMERCIAL"
+                        ] = " | ".join(
+                            asignados_debug.get("NOMBRE COMERCIAL", pd.Series(dtype=str))
+                            .dropna()
+                            .astype(str)
+                            .unique()
+                        )
+
+                        debug_sin_tarifa_global.loc[
+                            idx_debug,
+                            "NO_SERVICIO_ASIGNADO_A_LOCAL"
+                        ] = " | ".join(
+                            asignados_debug.get(general_local_col, pd.Series(dtype=str))
+                            .dropna()
+                            .astype(str)
+                            .unique()
+                        )
+
                 if "medidor" in parser_candidatos.columns:
                     debug_sin_tarifa_global.loc[
                         idx_debug,
@@ -6903,6 +6069,9 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
                     "PARSER_MEDIDOR_CANDIDATO",
                     "PARSER_TARIFA_CANDIDATO",
                     "PARSER_FILE_CANDIDATO",
+                    "NO_SERVICIO_ASIGNADO_A_CLIENTE",
+                    "NO_SERVICIO_ASIGNADO_A_NOMBRE_COMERCIAL",
+                    "NO_SERVICIO_ASIGNADO_A_LOCAL",
                     "TARIFA_FINAL"
                 ]
                 if c in debug_sin_tarifa_global.columns
@@ -6953,7 +6122,7 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
             "Match por medidor": int(general_ocupados_cc["_match_medidor"].sum()),
             "Match por cliente": int(general_ocupados_cc["_match_cliente"].sum()),
             "Match por nombre comercial": int(general_ocupados_cc["_match_nombre_comercial"].sum()),
-            "Match por no. local en direcci├│n": int(general_ocupados_cc["_match_no_local_direccion"].sum()),
+            "Match por no. local en dirección": int(general_ocupados_cc["_match_no_local_direccion"].sum()),
             "Match total": int(general_ocupados_cc["_tiene_recibo"].sum()),
             "Locales ocupados": len(general_ocupados_cc)
         })
@@ -7001,36 +6170,6 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
     coverage_by_mall = pd.DataFrame(coverage_rows)
 
     if not coverage_by_mall.empty:
-        # Consolidar centros comerciales duplicados por variantes del parser
-        # (por ejemplo, Liverpool/Iberdrola había generado una segunda fila de Ambar).
-        coverage_by_mall["Centro Comercial"] = coverage_by_mall["Centro Comercial"].apply(limpiar_nombre_cc)
-
-        coverage_by_mall = (
-            coverage_by_mall
-            .groupby("Centro Comercial", as_index=False, dropna=False)
-            .agg({
-                "Locales ocupados": "max",
-                "Locales ocupados con recibo": "sum",
-                "Locales ocupados sin recibo": "min"
-            })
-        )
-
-        coverage_by_mall["Locales ocupados con recibo"] = coverage_by_mall[[
-            "Locales ocupados",
-            "Locales ocupados con recibo"
-        ]].min(axis=1)
-
-        coverage_by_mall["Locales ocupados sin recibo"] = (
-            coverage_by_mall["Locales ocupados"]
-            - coverage_by_mall["Locales ocupados con recibo"]
-        ).clip(lower=0)
-
-        coverage_by_mall["Cobertura de muestra (%)"] = np.where(
-            coverage_by_mall["Locales ocupados"].gt(0),
-            coverage_by_mall["Locales ocupados con recibo"] / coverage_by_mall["Locales ocupados"] * 100,
-            0
-        ).round(1)
-
         coverage_by_mall = coverage_by_mall.sort_values(
             "Centro Comercial",
             ascending=True
@@ -7078,6 +6217,8 @@ def construir_muestra_con_recibo_global(parsed, general_data, mall_col):
         debug_sin_tarifa_df
     )
 
+
+
 muestra_con_recibo, coverage_by_mall, match_summary_df, sin_match_df, parser_sin_match_df, debug_sin_tarifa_df = construir_muestra_con_recibo_global(
     parsed=parsed,
     general_data=general_data,
@@ -7090,447 +6231,7 @@ muestra_con_recibo, coverage_by_mall, match_summary_df, sin_match_df, parser_sin
 # Esta es la muestra más completa disponible.
 # Ningún tab debe recalcular ni sobrescribir esta base.
 
-
 muestra_con_recibo_global = muestra_con_recibo.copy()
-
-# ------------------------------------------------------------
-# Confirmación adicional de matches OR parser enriquecido -> DG
-# ------------------------------------------------------------
-# DG no tiene no_servicio para la mayoría de los locales. Por eso el
-# match global debe poder nacer de un OR conservador: medidor, cliente,
-# nombre comercial, no. de local o file_path. La condición de control es
-# que ese OR resuelva a UN local de DG y a UN servicio eléctrico claro.
-#
-# Esta capa corrige casos donde el parser enriquecido sí tiene datos y el
-# local sí existe en DG, pero el match global base no alcanzó a copiar el
-# parser_match por diferencias de nombre, acentos, file_path o cambios de
-# medidor en el año.
-
-def _normalizar_valor_visual(value):
-    if pd.isna(value):
-        return ""
-    s = str(value).strip()
-    if s.upper() in ["", "NAN", "NONE", "<NA>"]:
-        return ""
-    if re.match(r"^\d+\.0$", s):
-        s = s.replace(".0", "")
-    return s
-
-
-def _join_unicos_force(values, max_items=20, upper=False):
-    vals = []
-    for v in values:
-        if isinstance(v, (list, tuple, set)):
-            iterable = v
-        else:
-            iterable = str(v).replace("|", ",").split(",")
-        for raw in iterable:
-            ss = _normalizar_valor_visual(raw)
-            if not ss:
-                continue
-            if upper:
-                ss = ss.upper()
-            if ss not in vals:
-                vals.append(ss)
-    if not vals:
-        return pd.NA
-    if len(vals) > max_items:
-        return " | ".join(vals[:max_items]) + f" | +{len(vals)-max_items} más"
-    return " | ".join(vals)
-
-
-def _compact_match_text(value):
-    return re.sub(r"[^A-Z0-9]", "", normalize_brand_name(value))
-
-
-def _serie_first_existing(df, candidates, default=""):
-    for col in candidates:
-        if col in df.columns:
-            return df[col]
-    return pd.Series(default, index=df.index)
-
-
-def _inferir_locales_ocupados_dg(general_data: pd.DataFrame) -> pd.DataFrame:
-    if general_data is None or general_data.empty:
-        return pd.DataFrame()
-    dg = general_data.copy()
-    dg["_cc_key_force"] = coalesce_cc_from_columns(
-        dg,
-        ["NOMBRE DEL CC", "Centro Comercial", "CENTRO COMERCIAL", "source_sheet"]
-    )
-    dg["_cliente_force"] = _serie_first_existing(dg, ["CLIENTE", "Cliente"]).fillna("").astype(str)
-    dg["_nombre_force"] = _serie_first_existing(dg, ["NOMBRE COMERCIAL", "Nombre Comercial", "Nombre comercial"]).fillna("").astype(str)
-    dg["_cliente_key_force"] = dg["_cliente_force"].apply(normalize_name_for_match)
-    dg["_nombre_key_force"] = dg["_nombre_force"].apply(normalize_brand_name)
-    dg["_cliente_compact_force"] = dg["_cliente_force"].apply(_compact_match_text)
-    dg["_nombre_compact_force"] = dg["_nombre_force"].apply(_compact_match_text)
-    med_col = first_existing_column(dg, ["No. De medidor", "No. de medidor", "No de medidor", "MEDIDOR", "Medidor"])
-    dg["_medidor_key_force"] = normalize_meter_cc(dg[med_col]) if med_col else ""
-    loc_col = first_existing_column(dg, ["No de Local", "No de local", "No. de Local", "No. de local", "No Local", "No. Local", "LOCAL", "Local"])
-    dg["_local_key_force"] = _serie_first_existing(dg, [loc_col] if loc_col else []).fillna("").astype(str).str.upper().str.strip()
-
-    nombre = dg["_nombre_force"].fillna("").astype(str).str.strip()
-    cliente = dg["_cliente_force"].fillna("").astype(str).str.strip()
-    mask_ocupado = ~(
-        (nombre.eq(""))
-        | (nombre.str.upper().eq("DISPONIBLE"))
-    ) | cliente.ne("")
-    return dg[mask_ocupado].copy()
-
-
-def _preparar_parser_force(parsed: pd.DataFrame, mall_col) -> pd.DataFrame:
-    pp = parsed.copy()
-    if pp.empty:
-        return pp
-    if "file_path" not in pp.columns:
-        pp["file_path"] = ""
-    if "no_servicio" not in pp.columns:
-        pp["no_servicio"] = ""
-    if "medidor" not in pp.columns:
-        pp["medidor"] = ""
-    if "cliente_nombre" not in pp.columns:
-        pp["cliente_nombre"] = ""
-    if "recibos_subgroup" not in pp.columns:
-        pp["recibos_subgroup"] = ""
-
-    cc_candidates = []
-    if mall_col and mall_col in pp.columns:
-        cc_candidates.append(mall_col)
-    cc_candidates += ["mall_folder", "mall", "centro_comercial", "Centro Comercial", "source_sheet", "file_path", "source_file_path"]
-    pp["_cc_key_force"] = coalesce_cc_from_columns(pp, cc_candidates)
-    pp["_file_path_key_force"] = _normalizar_file_path_enriq(pp["file_path"])
-    pp["_servicio_key_force"] = _servicio_sin_ceros_key(pp["no_servicio"])
-    pp["_servicio_preferido_force"] = pp.groupby("_servicio_key_force")["no_servicio"].transform(lambda x: _preferir_no_servicio_12_digitos(x.tolist()))
-    pp["_medidor_key_force"] = normalize_meter_cc(pp["medidor"])
-    pp["_cliente_key_force"] = pp["cliente_nombre"].apply(normalize_name_for_match)
-    pp["_subgrupo_key_force"] = pp["recibos_subgroup"].apply(normalize_brand_name)
-    pp["_cliente_compact_force"] = pp["cliente_nombre"].apply(_compact_match_text)
-    pp["_subgrupo_compact_force"] = pp["recibos_subgroup"].apply(_compact_match_text)
-    textos = pp["file_path"].fillna("").astype(str)
-    for col in ["source_file_path", "direccion_completa", "direccion_raw", "recibos_subgroup", "cliente_nombre"]:
-        if col in pp.columns:
-            textos = textos + " " + pp[col].fillna("").astype(str)
-    pp["_texto_parser_compact_force"] = textos.apply(_compact_match_text)
-
-    tarifa_col = first_existing_column(pp, ["tarifa_norm", "tarifa", "Tarifa", "TARIFA_FINAL"])
-    pp["_tarifa_force"] = normalize_tarifa_series(pp[tarifa_col]) if tarifa_col else ""
-    return pp
-
-
-def _grupo_parser_por_servicio_o_path(pp: pd.DataFrame) -> pd.DataFrame:
-    if pp.empty:
-        return pd.DataFrame()
-    pp = pp.copy()
-    pp["_grupo_force"] = np.where(
-        pp["_servicio_key_force"].fillna("").astype(str).str.strip().ne(""),
-        "SERVICIO::" + pp["_servicio_key_force"].fillna("").astype(str),
-        "FILE::" + pp["_file_path_key_force"].fillna("").astype(str)
-    )
-
-    rows = []
-    for grupo, g in pp.groupby("_grupo_force", dropna=False):
-        rows.append({
-            "_grupo_force": grupo,
-            "_cc_key_force": _join_unicos_force(g["_cc_key_force"].tolist(), max_items=1),
-            "_servicio_key_force": _join_unicos_force(g["_servicio_key_force"].tolist(), max_items=1),
-            "no_servicio_preferido": _preferir_no_servicio_12_digitos(g["no_servicio"].tolist()),
-            "medidores": [x for x in g["_medidor_key_force"].dropna().astype(str).unique().tolist() if x],
-            "clientes": [x for x in g["cliente_nombre"].dropna().astype(str).unique().tolist() if _normalizar_valor_visual(x)],
-            "subgrupos": [x for x in g["recibos_subgroup"].dropna().astype(str).unique().tolist() if _normalizar_valor_visual(x)],
-            "clientes_key": [x for x in g["_cliente_key_force"].dropna().astype(str).unique().tolist() if x],
-            "subgrupos_key": [x for x in g["_subgrupo_key_force"].dropna().astype(str).unique().tolist() if x],
-            "clientes_compact": [x for x in g["_cliente_compact_force"].dropna().astype(str).unique().tolist() if x],
-            "subgrupos_compact": [x for x in g["_subgrupo_compact_force"].dropna().astype(str).unique().tolist() if x],
-            "texto_parser_compact": " ".join(g["_texto_parser_compact_force"].dropna().astype(str).unique().tolist()),
-            "tarifas": [x for x in g["_tarifa_force"].dropna().astype(str).unique().tolist() if x],
-            "file_paths": [x for x in g["file_path"].dropna().astype(str).unique().tolist() if _normalizar_valor_visual(x)],
-            "kwh_total_num": pd.to_numeric(g.get("kwh_total_num", pd.Series(dtype=float)), errors="coerce").max(),
-            "kwmax_num": pd.to_numeric(g.get("kwmax_num", pd.Series(dtype=float)), errors="coerce").max(),
-            "demanda_contratada_kw": pd.to_numeric(g.get("demanda_contratada_kw", pd.Series(dtype=float)), errors="coerce").max(),
-            "kwh_fuente": _join_unicos_force(g["kwh_total_fuente"].tolist(), max_items=4) if "kwh_total_fuente" in g.columns else pd.NA,
-            "kwmax_fuente": _join_unicos_force(g["kwmax_fuente"].tolist(), max_items=4) if "kwmax_fuente" in g.columns else pd.NA,
-            "demanda_fuente": _join_unicos_force(g["demanda_contratada_fuente"].tolist(), max_items=4) if "demanda_contratada_fuente" in g.columns else pd.NA,
-            "fila_agregada_desde": _join_unicos_force(g["fila_agregada_desde"].tolist(), max_items=4) if "fila_agregada_desde" in g.columns else pd.NA,
-            "parser_enriquecido_status": _join_unicos_force(g["parser_enriquecido_status"].tolist(), max_items=5) if "parser_enriquecido_status" in g.columns else pd.NA,
-        })
-    return pd.DataFrame(rows)
-
-
-
-def _safe_scalar_force(value, default=""):
-    """Convierte pd.NA/NaN/None a default sin evaluar pd.NA como booleano."""
-    if value is None:
-        return default
-    try:
-        if pd.isna(value):
-            return default
-    except Exception:
-        pass
-    return value
-
-
-def _safe_list_force(value):
-    """Devuelve lista limpia aunque value sea pd.NA/None/string/list."""
-    if value is None:
-        return []
-    try:
-        if pd.isna(value):
-            return []
-    except Exception:
-        pass
-    if isinstance(value, list):
-        return value
-    if isinstance(value, tuple):
-        return list(value)
-    if isinstance(value, set):
-        return list(value)
-    return [value]
-
-def _match_group_to_dg_unique(pg, dg_occ: pd.DataFrame):
-    cc_key_pg = str(_safe_scalar_force(pg.get("_cc_key_force", ""), "")).strip()
-    if not cc_key_pg:
-        return None, "sin_cc_parser"
-    dg_cc = dg_occ[dg_occ["_cc_key_force"].astype(str).eq(cc_key_pg)].copy()
-    if dg_cc.empty:
-        return None, "sin_dg_cc"
-
-    criteria = {}
-
-    # 1) Medidor exacto dentro del CC
-    medidores = set(_safe_list_force(pg.get("medidores", [])))
-    if medidores:
-        mask = dg_cc["_medidor_key_force"].isin(medidores) & dg_cc["_medidor_key_force"].ne("")
-        if mask.any():
-            criteria["Medidor"] = set(dg_cc.loc[mask].index.tolist())
-
-    # 2) Cliente / nombre exacto o parcial fuerte dentro del CC
-    clientes_key = _safe_list_force(pg.get("clientes_key", []))
-    subgrupos_key = _safe_list_force(pg.get("subgrupos_key", []))
-    all_names_key = [x for x in clientes_key + subgrupos_key if x]
-
-    idx_cliente_nombre = set()
-    for idx, row in dg_cc.iterrows():
-        dg_cliente = row.get("_cliente_key_force", "")
-        dg_nombre = row.get("_nombre_key_force", "")
-        for parser_name in all_names_key:
-            if (
-                (dg_cliente and has_partial_match_cc(dg_cliente, [parser_name]))
-                or (dg_nombre and has_partial_match_cc(dg_nombre, [parser_name]))
-                or (parser_name and has_partial_match_cc(parser_name, [dg_cliente, dg_nombre]))
-                or same_person_name_unordered(dg_cliente, parser_name)
-                or same_person_name_unordered(dg_nombre, parser_name)
-            ):
-                idx_cliente_nombre.add(idx)
-                break
-    if idx_cliente_nombre:
-        criteria["Cliente/nombre"] = idx_cliente_nombre
-
-    # 3) file_path / recibos_subgroup contiene nombre o cliente de DG
-    texto_parser = str(_safe_scalar_force(pg.get("texto_parser_compact", ""), ""))
-    idx_path = set()
-    if texto_parser:
-        for idx, row in dg_cc.iterrows():
-            for dg_text in [row.get("_cliente_compact_force", ""), row.get("_nombre_compact_force", "")]:
-                if dg_text and len(dg_text) >= 5 and (dg_text in texto_parser or texto_parser in dg_text):
-                    idx_path.add(idx)
-                    break
-    if idx_path:
-        criteria["file_path/nombre"] = idx_path
-
-    # 4) Casos especiales muy claros por negocio
-    joined = " ".join(_safe_list_force(pg.get("clientes", [])) + _safe_list_force(pg.get("subgrupos", []))).upper()
-    if "LIVERPOOL" in joined or "IBERDROLA" in joined:
-        mask_liverpool = dg_cc["_nombre_key_force"].astype(str).str.contains("LIVERPOOL", na=False) | dg_cc["_cliente_key_force"].astype(str).str.contains("LIVERPOOL", na=False)
-        if mask_liverpool.any():
-            criteria["Override Liverpool"] = set(dg_cc.loc[mask_liverpool].index.tolist())
-
-    # Decisión: si algún criterio fuerte da un único local, confirmamos.
-    # Si varios criterios apuntan al mismo único local, también.
-    for criterio_preferente in ["Medidor", "Override Liverpool", "Cliente/nombre", "file_path/nombre"]:
-        idxs = criteria.get(criterio_preferente, set())
-        if len(idxs) == 1:
-            idx = list(idxs)[0]
-            return dg_occ.loc[idx].copy(), criterio_preferente
-
-    union = set()
-    for idxs in criteria.values():
-        union |= idxs
-    if len(union) == 1:
-        idx = list(union)[0]
-        return dg_occ.loc[idx].copy(), " + ".join(criteria.keys())
-
-    if len(union) > 1:
-        return None, "ambiguo: varios locales DG"
-    return None, "sin_match_or"
-
-
-def _row_id_dg_match(df: pd.DataFrame) -> pd.Series:
-    if df is None or df.empty:
-        return pd.Series(dtype=str)
-    cc = coalesce_cc_from_columns(df, ["NOMBRE DEL CC", "Centro Comercial", "CENTRO COMERCIAL", "source_sheet", "_centro_comercial_limpio"])
-    nombre = _serie_first_existing(df, ["NOMBRE COMERCIAL", "Nombre Comercial", "Nombre comercial"]).fillna("").astype(str).apply(normalize_brand_name)
-    cliente = _serie_first_existing(df, ["CLIENTE", "Cliente"]).fillna("").astype(str).apply(normalize_name_for_match)
-    local = _serie_first_existing(df, ["No de Local", "No. de Local", "No Local", "LOCAL", "Local"]).fillna("").astype(str).str.upper().str.strip()
-    return cc.astype(str) + "||" + nombre.astype(str) + "||" + cliente.astype(str) + "||" + local.astype(str)
-
-
-def _recalcular_cobertura_por_cc(general_data, muestra_df):
-    if general_data is None or general_data.empty:
-        return pd.DataFrame()
-    dg = _inferir_locales_ocupados_dg(general_data)
-    if dg.empty:
-        return pd.DataFrame()
-    dg["_dg_id_force"] = _row_id_dg_match(dg)
-    muestra_tmp = muestra_df.copy() if muestra_df is not None else pd.DataFrame()
-    if muestra_tmp.empty:
-        matched_ids = set()
-    else:
-        muestra_tmp["_dg_id_force"] = _row_id_dg_match(muestra_tmp)
-        matched_ids = set(muestra_tmp["_dg_id_force"].dropna().astype(str).tolist())
-    dg["_con_recibo_force"] = dg["_dg_id_force"].isin(matched_ids)
-    rows = []
-    for cc_k, g in dg.groupby("_cc_key_force", dropna=False):
-        if not str(cc_k).strip():
-            continue
-        ocupados = int(len(g))
-        con = int(g["_con_recibo_force"].sum())
-        rows.append({
-            "Centro Comercial": cc_display_from_key(cc_k),
-            "Locales ocupados": ocupados,
-            "Locales ocupados con recibo": con,
-            "Locales ocupados sin recibo": ocupados - con,
-            "Cobertura de muestra (%)": round((con / ocupados * 100) if ocupados else 0, 1)
-        })
-    out = pd.DataFrame(rows).sort_values("Centro Comercial").reset_index(drop=True)
-    if not out.empty:
-        total_oc = int(out["Locales ocupados"].sum())
-        total_con = int(out["Locales ocupados con recibo"].sum())
-        total = pd.DataFrame([{
-            "Centro Comercial": "TOTAL",
-            "Locales ocupados": total_oc,
-            "Locales ocupados con recibo": total_con,
-            "Locales ocupados sin recibo": total_oc - total_con,
-            "Cobertura de muestra (%)": round((total_con / total_oc * 100) if total_oc else 0, 1)
-        }])
-        out = pd.concat([out, total], ignore_index=True)
-    return out
-
-
-def _forzar_confirmaciones_or_en_muestra(parsed, general_data, muestra_df, coverage_df, mall_col):
-    if parsed is None or parsed.empty or general_data is None or general_data.empty:
-        return muestra_df, coverage_df, pd.DataFrame()
-    muestra_out = muestra_df.copy() if muestra_df is not None else pd.DataFrame()
-    dg_occ = _inferir_locales_ocupados_dg(general_data)
-    pp = _preparar_parser_force(parsed, mall_col)
-    pgroups = _grupo_parser_por_servicio_o_path(pp)
-    if dg_occ.empty or pgroups.empty:
-        return muestra_out, coverage_df, pd.DataFrame()
-
-    # Ya confirmados por servicio/file/path/DG row id
-    confirmed_service_keys = set()
-    confirmed_file_keys = set()
-    confirmed_dg_ids = set()
-    if not muestra_out.empty:
-        confirmed_dg_ids = set(_row_id_dg_match(muestra_out).dropna().astype(str).tolist())
-        for col in ["no_servicio", "parser_no_servicio_match", "No. servicio diagnóstico"]:
-            if col in muestra_out.columns:
-                vals = []
-                for v in muestra_out[col].dropna().astype(str).tolist():
-                    vals += str(v).replace("|", ",").split(",")
-                confirmed_service_keys.update(_servicio_sin_ceros_key(pd.Series(vals)).replace("", pd.NA).dropna().astype(str).tolist())
-        for col in ["file_path", "parser_file_path_match", "parser_file_match", "file_path diagnóstico", "file_path base", "source_file_path"]:
-            if col in muestra_out.columns:
-                vals = []
-                for v in muestra_out[col].dropna().astype(str).tolist():
-                    vals += str(v).replace("|", ",").split(",")
-                confirmed_file_keys.update(_normalizar_file_path_enriq(pd.Series(vals)).replace("", pd.NA).dropna().astype(str).tolist())
-
-    new_rows = []
-    audit_rows = []
-    for _, pg in pgroups.iterrows():
-        serv_key = str(_safe_scalar_force(pg.get("_servicio_key_force", ""), "")).strip()
-        file_keys = _normalizar_file_path_enriq(pd.Series(_safe_list_force(pg.get("file_paths", [])))).replace("", pd.NA).dropna().astype(str).tolist()
-        if serv_key and serv_key in confirmed_service_keys:
-            continue
-        if any(fk in confirmed_file_keys for fk in file_keys):
-            continue
-        dg_row, criterio = _match_group_to_dg_unique(pg, dg_occ)
-        if dg_row is None:
-            continue
-        dg_id = _row_id_dg_match(pd.DataFrame([dg_row])).iloc[0]
-        if dg_id in confirmed_dg_ids:
-            continue
-
-        row = dg_row.copy()
-        # Asegurar columnas de salida existentes y parser_match.
-        for col in muestra_out.columns:
-            if col not in row.index:
-                row[col] = pd.NA
-        if "_centro_comercial_limpio" not in row.index:
-            row["_centro_comercial_limpio"] = cc_display_from_key(pg.get("_cc_key_force", ""))
-        row["_centro_comercial_limpio"] = cc_display_from_key(pg.get("_cc_key_force", row.get("_centro_comercial_limpio", "")))
-
-        ns_pref = pg.get("no_servicio_preferido", pd.NA)
-        row["no_servicio"] = ns_pref
-        row["parser_no_servicio_match"] = ns_pref
-        row["parser_medidor_match"] = _join_unicos_force(pg.get("medidores", []), upper=True)
-        row["parser_tarifa_match"] = _join_unicos_force(pg.get("tarifas", []), upper=True)
-        row["TARIFA_FINAL"] = normalize_tarifa_value(row.get("parser_tarifa_match", ""))
-        row["parser_cliente_match"] = _join_unicos_force(pg.get("clientes", []))
-        row["parser_recibos_subgroup_match"] = _join_unicos_force(pg.get("subgrupos", []))
-        row["parser_file_match"] = _join_unicos_force(pg.get("file_paths", []), max_items=4)
-        row["parser_criterio_match"] = f"Confirmación adicional OR ({criterio})"
-        row["kwh_total_num"] = pg.get("kwh_total_num", pd.NA)
-        row["kwmax_num"] = pg.get("kwmax_num", pd.NA)
-        row["kwmax"] = pg.get("kwmax_num", pd.NA)
-        row["demanda_contratada_kw"] = pg.get("demanda_contratada_kw", pd.NA)
-        row["kwh_total_fuente"] = pg.get("kwh_fuente", pd.NA)
-        row["kwmax_fuente"] = pg.get("kwmax_fuente", pd.NA)
-        row["demanda_contratada_fuente"] = pg.get("demanda_fuente", pd.NA)
-        row["fila_agregada_desde"] = pg.get("fila_agregada_desde", pd.NA)
-        row["parser_enriquecido_status"] = _join_unicos_force([pg.get("parser_enriquecido_status", pd.NA), f"confirmado_adicional_or_{criterio}"])
-        row["_tiene_recibo"] = True
-        row["criterio_match"] = f"Confirmación adicional OR ({criterio})"
-        new_rows.append(row)
-        audit_rows.append({
-            "Centro Comercial": row.get("_centro_comercial_limpio", cc_display_from_key(pg.get("_cc_key_force", ""))),
-            "Nombre Comercial DG": row.get("NOMBRE COMERCIAL", pd.NA),
-            "Cliente DG": row.get("CLIENTE", pd.NA),
-            "Cliente parser": _join_unicos_force(pg.get("clientes", [])),
-            "Subgrupo parser": _join_unicos_force(pg.get("subgrupos", [])),
-            "no_servicio confirmado": ns_pref,
-            "Medidor(es) parser": _join_unicos_force(pg.get("medidores", []), upper=True),
-            "Tarifa(s)": _join_unicos_force(pg.get("tarifas", []), upper=True),
-            "Criterio confirmación": criterio,
-            "file_path ejemplo": _join_unicos_force(pg.get("file_paths", []), max_items=2),
-        })
-        if serv_key:
-            confirmed_service_keys.add(serv_key)
-        for fk in file_keys:
-            confirmed_file_keys.add(fk)
-        confirmed_dg_ids.add(dg_id)
-
-    if new_rows:
-        add_df = pd.DataFrame(new_rows)
-        for col in muestra_out.columns:
-            if col not in add_df.columns:
-                add_df[col] = pd.NA
-        for col in add_df.columns:
-            if col not in muestra_out.columns:
-                muestra_out[col] = pd.NA
-        add_df = add_df[muestra_out.columns]
-        muestra_out = pd.concat([muestra_out, add_df], ignore_index=True)
-        coverage_df = _recalcular_cobertura_por_cc(general_data, muestra_out)
-
-    return muestra_out, coverage_df, pd.DataFrame(audit_rows)
-
-muestra_con_recibo_global, coverage_by_mall, confirmaciones_or_adicionales_df = _forzar_confirmaciones_or_en_muestra(
-    parsed=parsed,
-    general_data=general_data,
-    muestra_df=muestra_con_recibo_global,
-    coverage_df=coverage_by_mall,
-    mall_col=mall_col
-)
 
 # ------------------------------------------------------------
 # Regla PDBT: demanda contratada por default
@@ -7541,7 +6242,7 @@ muestra_con_recibo_global, coverage_by_mall, confirmaciones_or_adicionales_df = 
 # Entonces se asignan 25 kW.
 # Si el parser sí trae demanda_contratada_kw, se conserva.
 
-pdbt_default_3_count = 0
+pdbt_default_25_count = 0
 
 if "demanda_contratada_kw" not in muestra_con_recibo_global.columns:
     muestra_con_recibo_global["demanda_contratada_kw"] = pd.NA
@@ -7574,14 +6275,14 @@ mask_sin_demanda_parser = (
     muestra_con_recibo_global["demanda_contratada_kw"].isna()
 )
 
-pdbt_default_3_count = int(
+pdbt_default_25_count = int(
     (mask_pdbt & mask_sin_demanda_parser).sum()
 )
 
 muestra_con_recibo_global.loc[
     mask_pdbt & mask_sin_demanda_parser,
     "demanda_contratada_kw"
-] = 3
+] = 25
 
 # ============================================================
 # Estimación PDBT con NREL y promedio de últimos 12 meses
@@ -7713,33 +6414,20 @@ def enriquecer_muestra_con_demanda(muestra_con_recibo: pd.DataFrame, parsed: pd.
     # Llave de centro comercial
     # --------------------------------------------------
 
-    df["_cc_key"] = coalesce_cc_from_columns(
-        df,
-        [
-            "_centro_comercial_limpio",
-            "NOMBRE DEL CC",
-            "CENTRO COMERCIAL",
-            "Centro Comercial",
-            "source_sheet",
-            "mall_folder",
-            "parser_mall_folder_match",
-            "file_path",
-            "source_file_path",
-            "direccion_completa",
-            "direccion_raw"
-        ]
-    )
+    if "_centro_comercial_limpio" in df.columns:
+        df["_cc_key"] = df["_centro_comercial_limpio"].apply(cc_key)
 
-    if "_centro_comercial_limpio" not in df.columns:
-        df["_centro_comercial_limpio"] = df["_cc_key"].apply(cc_display_from_key)
+    elif "NOMBRE DEL CC" in df.columns:
+        df["_cc_key"] = df["NOMBRE DEL CC"].apply(cc_key)
+
+    elif "CENTRO COMERCIAL" in df.columns:
+        df["_cc_key"] = df["CENTRO COMERCIAL"].apply(cc_key)
+
+    elif "source_sheet" in df.columns:
+        df["_cc_key"] = df["source_sheet"].apply(cc_key)
+
     else:
-        _mask_cc_limpio_vacio = (
-            df["_centro_comercial_limpio"].fillna("").astype(str).str.strip().isin(["", "nan", "None", "<NA>"])
-            & df["_cc_key"].fillna("").astype(str).str.strip().ne("")
-        )
-        df.loc[_mask_cc_limpio_vacio, "_centro_comercial_limpio"] = (
-            df.loc[_mask_cc_limpio_vacio, "_cc_key"].apply(cc_display_from_key)
-        )
+        df["_cc_key"] = ""
 
     if "mall_folder" in p.columns:
         p["_cc_key"] = p["mall_folder"].apply(cc_key)
@@ -7824,6 +6512,7 @@ def enriquecer_muestra_con_demanda(muestra_con_recibo: pd.DataFrame, parsed: pd.
             "no_servicio",
             "medidor",
             "tarifa_norm",
+            "demanda_promedio_anual_kw",
             "demanda_maxima_anual_kw",
             "meses_con_demanda",
             "periodo_12m_inicio",
@@ -7846,10 +6535,7 @@ def enriquecer_muestra_con_demanda(muestra_con_recibo: pd.DataFrame, parsed: pd.
         if col in p.columns
     ]
 
-    demanda_cols = list(dict.fromkeys(demanda_cols))
-
     demanda_lookup = p[demanda_cols].copy()
-    demanda_lookup = demanda_lookup.loc[:, ~demanda_lookup.columns.duplicated()].copy()
 
     # --------------------------------------------------
     # Lookup preferente por no_servicio
@@ -7943,7 +6629,6 @@ def enriquecer_muestra_con_demanda(muestra_con_recibo: pd.DataFrame, parsed: pd.
         demanda_lookup_servicio = demanda_lookup[
             demanda_lookup["_key_no_servicio"].astype(str).str.strip() != ""
         ].copy()
-        demanda_lookup_servicio = demanda_lookup_servicio.loc[:, ~demanda_lookup_servicio.columns.duplicated()].copy()
 
         if not demanda_lookup_servicio.empty:
             agg_dict_servicio = {}
@@ -7964,6 +6649,12 @@ def enriquecer_muestra_con_demanda(muestra_con_recibo: pd.DataFrame, parsed: pd.
                 agg_dict_servicio["tarifa_norm"] = (
                     "tarifa_norm",
                     lambda x: join_unique_values(x, upper=True)
+                )
+
+            if "demanda_promedio_anual_kw" in demanda_lookup_servicio.columns:
+                agg_dict_servicio["demanda_promedio_anual_kw"] = (
+                    "demanda_promedio_anual_kw",
+                    "max"
                 )
 
             if "demanda_maxima_anual_kw" in demanda_lookup_servicio.columns:
@@ -8104,7 +6795,7 @@ def enriquecer_muestra_con_demanda(muestra_con_recibo: pd.DataFrame, parsed: pd.
                         )
 
                 for col in [
-                    "demanda_maxima_anual_kw",
+                    "demanda_promedio_anual_kw",
                     "demanda_maxima_anual_kw",
                     "meses_con_demanda",
                     "kwh_12m"
@@ -8215,6 +6906,7 @@ def enriquecer_muestra_con_demanda(muestra_con_recibo: pd.DataFrame, parsed: pd.
                         "no_servicio",
                         "medidor",
                         "tarifa_norm",
+                        "demanda_promedio_anual_kw",
                         "demanda_maxima_anual_kw",
                         "meses_con_demanda",
                         "periodo_12m_inicio",
@@ -8329,6 +7021,7 @@ def enriquecer_muestra_con_demanda(muestra_con_recibo: pd.DataFrame, parsed: pd.
             "no_servicio",
             "medidor",
             "tarifa_norm",
+            "demanda_promedio_anual_kw",
             "demanda_maxima_anual_kw",
             "meses_con_demanda",
             "periodo_12m_inicio",
@@ -8443,6 +7136,7 @@ def enriquecer_muestra_con_demanda(muestra_con_recibo: pd.DataFrame, parsed: pd.
                 "no_servicio",
                 "medidor",
                 "tarifa_norm",
+                "demanda_promedio_anual_kw",
                 "demanda_maxima_anual_kw",
                 "meses_con_demanda",
                 "periodo_12m_inicio",
@@ -8631,6 +7325,7 @@ def enriquecer_muestra_con_demanda(muestra_con_recibo: pd.DataFrame, parsed: pd.
                 "no_servicio",
                 "medidor",
                 "tarifa_norm",
+                "demanda_promedio_anual_kw",
                 "demanda_maxima_anual_kw",
                 "meses_con_demanda",
                 "periodo_12m_inicio",
@@ -8764,6 +7459,7 @@ def enriquecer_muestra_con_demanda(muestra_con_recibo: pd.DataFrame, parsed: pd.
                 "no_servicio",
                 "medidor",
                 "tarifa_norm",
+                "demanda_promedio_anual_kw",
                 "demanda_maxima_anual_kw",
                 "meses_con_demanda",
                 "periodo_12m_inicio",
@@ -8788,6 +7484,7 @@ def enriquecer_muestra_con_demanda(muestra_con_recibo: pd.DataFrame, parsed: pd.
             "no_servicio",
             "medidor",
             "tarifa_norm",
+            "demanda_promedio_anual_kw",
             "demanda_maxima_anual_kw",
             "meses_con_demanda",
             "periodo_12m_inicio",
@@ -8831,6 +7528,7 @@ def enriquecer_muestra_con_demanda(muestra_con_recibo: pd.DataFrame, parsed: pd.
                 "no_servicio",
                 "medidor",
                 "tarifa_norm",
+                "demanda_promedio_anual_kw",
                 "demanda_maxima_anual_kw",
                 "meses_con_demanda",
                 "periodo_12m_inicio",
@@ -8856,6 +7554,7 @@ def enriquecer_muestra_con_demanda(muestra_con_recibo: pd.DataFrame, parsed: pd.
             "no_servicio",
             "medidor",
             "tarifa_norm",
+            "demanda_promedio_anual_kw",
             "demanda_maxima_anual_kw",
             "meses_con_demanda",
             "periodo_12m_inicio",
@@ -8979,6 +7678,7 @@ def enriquecer_muestra_con_demanda(muestra_con_recibo: pd.DataFrame, parsed: pd.
             "no_servicio",
             "medidor",
             "tarifa_norm",
+            "demanda_promedio_anual_kw",
             "demanda_maxima_anual_kw",
             "meses_con_demanda",
             "periodo_12m_inicio",
@@ -9100,90 +7800,6 @@ def enriquecer_muestra_con_demanda(muestra_con_recibo: pd.DataFrame, parsed: pd.
 
             df.at[idx, "criterio_union_demanda"] = "No. local / dirección"
 
-    # --------------------------------------------------
-    # Override final: Liverpool / Ambar con recibos Iberdrola
-    # --------------------------------------------------
-    # Si el parser trae filas source_utility = IBERDROLA, esas filas ya fueron
-    # forzadas a Liverpool / Ambar. Aquí copiamos la demanda anual al local de DG
-    # aunque el parser no traiga no_servicio/medidor suficientes para el match regular.
-
-    if "source_utility" in p.columns:
-        mask_iberdrola_parser = (
-            p["source_utility"]
-            .fillna("")
-            .astype(str)
-            .str.upper()
-            .str.strip()
-            .eq("IBERDROLA")
-        )
-
-        ib = p[mask_iberdrola_parser].copy()
-
-        if not ib.empty:
-            ib_demanda = (
-                pd.to_numeric(ib["demanda_maxima_anual_kw"], errors="coerce")
-                if "demanda_maxima_anual_kw" in ib.columns
-                else pd.Series(dtype=float)
-            )
-            ib_kwh = (
-                pd.to_numeric(ib["kwh_12m"], errors="coerce")
-                if "kwh_12m" in ib.columns
-                else pd.Series(dtype=float)
-            )
-            ib_contratada = (
-                pd.to_numeric(ib["demanda_contratada_kw"], errors="coerce")
-                if "demanda_contratada_kw" in ib.columns
-                else pd.Series(dtype=float)
-            )
-
-            demanda_ib = ib_demanda.max(skipna=True) if not ib_demanda.dropna().empty else pd.NA
-            kwh_ib = ib_kwh.max(skipna=True) if not ib_kwh.dropna().empty else pd.NA
-            contratada_ib = ib_contratada.max(skipna=True) if not ib_contratada.dropna().empty else pd.NA
-
-            cc_df = df["_cc_key"].fillna("").astype(str).str.upper() if "_cc_key" in df.columns else pd.Series([""] * len(df), index=df.index)
-            nombre_df = (
-                df["NOMBRE COMERCIAL"].fillna("").astype(str).str.upper()
-                if "NOMBRE COMERCIAL" in df.columns
-                else pd.Series([""] * len(df), index=df.index)
-            )
-            cliente_df = (
-                df["CLIENTE"].fillna("").astype(str).str.upper()
-                if "CLIENTE" in df.columns
-                else pd.Series([""] * len(df), index=df.index)
-            )
-
-            mask_liverpool_ambar = (
-                cc_df.str.contains("AMBAR", na=False)
-                & (
-                    nombre_df.str.contains("LIVERPOOL", na=False)
-                    | cliente_df.str.contains("LIVERPOOL", na=False)
-                )
-            )
-
-            if mask_liverpool_ambar.any():
-                if pd.notna(demanda_ib):
-                    df.loc[mask_liverpool_ambar, "demanda_maxima_anual_kw"] = demanda_ib
-                if pd.notna(kwh_ib):
-                    df.loc[mask_liverpool_ambar, "kwh_12m"] = kwh_ib
-                if pd.notna(contratada_ib) and "demanda_contratada_kw" in df.columns:
-                    df.loc[mask_liverpool_ambar, "demanda_contratada_kw"] = contratada_ib
-
-                if "tarifa_norm" in df.columns:
-                    df.loc[mask_liverpool_ambar, "tarifa_norm"] = "GDMTH"
-                if "Tarifa" in df.columns:
-                    df.loc[mask_liverpool_ambar, "Tarifa"] = "GDMTH"
-
-                df.loc[
-                    mask_liverpool_ambar,
-                    "criterio_union_demanda"
-                ] = "Override Iberdrola / Liverpool Ambar"
-
-                if "estatus_demanda" in df.columns:
-                    df.loc[
-                        mask_liverpool_ambar,
-                        "estatus_demanda"
-                    ] = "Calculada con kwmax Iberdrola"
-
     return df
 
 
@@ -9224,33 +7840,20 @@ def construir_base_densidad_demanda(
     # Centro comercial normalizado
     # --------------------------------------------------------
 
-    df["_cc_key_reporte"] = coalesce_cc_from_columns(
-        df,
-        [
-            "_centro_comercial_limpio",
-            "NOMBRE DEL CC",
-            "CENTRO COMERCIAL",
-            "Centro Comercial",
-            "source_sheet",
-            "mall_folder",
-            "parser_mall_folder_match",
-            "file_path",
-            "source_file_path",
-            "direccion_completa",
-            "direccion_raw"
-        ]
-    )
+    if "_centro_comercial_limpio" in df.columns:
+        df["_cc_key_reporte"] = df["_centro_comercial_limpio"].apply(cc_key)
 
-    if "_centro_comercial_limpio" not in df.columns:
-        df["_centro_comercial_limpio"] = df["_cc_key_reporte"].apply(cc_display_from_key)
+    elif "NOMBRE DEL CC" in df.columns:
+        df["_cc_key_reporte"] = df["NOMBRE DEL CC"].apply(cc_key)
+
+    elif "CENTRO COMERCIAL" in df.columns:
+        df["_cc_key_reporte"] = df["CENTRO COMERCIAL"].apply(cc_key)
+
+    elif "source_sheet" in df.columns:
+        df["_cc_key_reporte"] = df["source_sheet"].apply(cc_key)
+
     else:
-        _mask_cc_reporte_vacio = (
-            df["_centro_comercial_limpio"].fillna("").astype(str).str.strip().isin(["", "nan", "None", "<NA>"])
-            & df["_cc_key_reporte"].fillna("").astype(str).str.strip().ne("")
-        )
-        df.loc[_mask_cc_reporte_vacio, "_centro_comercial_limpio"] = (
-            df.loc[_mask_cc_reporte_vacio, "_cc_key_reporte"].apply(cc_display_from_key)
-        )
+        df["_cc_key_reporte"] = ""
 
     # --------------------------------------------------------
     # Nombre comercial
@@ -9489,12 +8092,12 @@ def construir_base_densidad_demanda(
     # --------------------------------------------------------
     # Demanda máxima anual
     # --------------------------------------------------------
-    # Concepto estándar de toda la app:
-    # promedio de las demandas máximas de los recibos más recientes disponibles.
+    # Concepto estándar de esta versión de prueba:
+    # Demanda máxima anual (kW) = máxima demanda mensual registrada/estimada
+    # dentro de la ventana anual disponible.
     #
-    # Si los recibos son bimestrales, se usan hasta 6.
-    # Si los recibos son mensuales, se usan hasta 12.
-    # Si hay menos recibos disponibles, se promedia con los existentes.
+    # Para GDMTH/GDMTO/GDBT viene del kwmax del parser.
+    # Para PDBT viene de la estimación con perfiles NREL cuando exista perfil.
 
     if "demanda_maxima_anual_kw" in df.columns:
         df["Demanda máxima anual (kW)"] = pd.to_numeric(
@@ -9504,658 +8107,14 @@ def construir_base_densidad_demanda(
     else:
         df["Demanda máxima anual (kW)"] = pd.NA
 
-    # Conservamos esta columna solo como respaldo/auditoría si existe,
-    # pero ya no será la métrica principal de la app.
-    if "demanda_maxima_anual_kw" in df.columns:
-        df["Demanda máxima anual (kW)"] = pd.to_numeric(
-            df["demanda_maxima_anual_kw"],
+    # Conservamos el promedio como referencia/auditoría.
+    if "demanda_promedio_anual_kw" in df.columns:
+        df["Demanda promedio anual (kW)"] = pd.to_numeric(
+            df["demanda_promedio_anual_kw"],
             errors="coerce"
         )
     else:
-        df["Demanda máxima anual (kW)"] = pd.NA
-
-
-    # --------------------------------------------------------
-    # Refuerzo puntual desde CSV especial Parks / Liverpool / Top Mart / MYA
-    # --------------------------------------------------------
-    # Este archivo complementa al parser. Algunos registros vienen sin no_servicio,
-    # periodo o cliente_nombre suficiente para que el match normal los lleve hasta DG.
-    # Aquí reforzamos únicamente los casos puntuales ya identificados:
-    # - Liverpool / Ambar: trae kwmax medido.
-    # - Top Mart / Pabellón Navojoa: trae kWh_total para estimar PDBT.
-    # - MOM & SON'S / Midtown Jalisco: trae kWh_total para estimar PDBT.
-
-    def _rescatar_numero_especial_desde_csv(mask_archivo, columna):
-        if not PARKS_HOSPITALITY_RESCUE_CSV.exists():
-            return pd.NA
-
-        try:
-            rescue = pd.read_csv(
-                PARKS_HOSPITALITY_RESCUE_CSV,
-                dtype=str,
-                low_memory=False
-            )
-        except Exception:
-            return pd.NA
-
-        if rescue.empty or columna not in rescue.columns:
-            return pd.NA
-
-        path_col = first_existing_column(
-            rescue,
-            [
-                "file_path",
-                "source_file_path"
-            ]
-        )
-
-        if path_col is None:
-            return pd.NA
-
-        path_txt = (
-            rescue[path_col]
-            .fillna("")
-            .astype(str)
-            .str.upper()
-        )
-
-        valores = pd.to_numeric(
-            rescue.loc[mask_archivo(path_txt), columna],
-            errors="coerce"
-        ).dropna()
-
-        if valores.empty:
-            return pd.NA
-
-        return valores.max()
-
-    def _estimar_demanda_pdbt_especial(kwh_total, row_df):
-        if pd.isna(kwh_total) or float(kwh_total) <= 0:
-            return pd.NA
-
-        try:
-            cc_master_path = DATA_DIR / "profiles" / "cc_master_data.csv"
-            profiles_dir = DATA_DIR / "profiles"
-
-            if cc_master_path.exists():
-                climate_mapping_df = pd.read_csv(cc_master_path)
-                climate_mapping_df.columns = climate_mapping_df.columns.str.strip()
-            else:
-                climate_mapping_df = pd.DataFrame()
-
-            centro = row_df.get("_centro_comercial_limpio", "")
-
-            if not centro and "NOMBRE DEL CC" in row_df.index:
-                centro = row_df.get("NOMBRE DEL CC", "")
-            if not centro and "source_sheet" in row_df.index:
-                centro = row_df.get("source_sheet", "")
-
-            subgiro = row_df.get("Giro comercial densidad", "")
-            if not subgiro:
-                subgiro = row_df.get("SUBGIRO_COMERCIAL", "")
-            if not subgiro:
-                subgiro = row_df.get("GIRO_COMERCIAL", "")
-            if not subgiro:
-                subgiro = row_df.get("GIRO", "")
-
-            tipo_local = row_df.get("TIPO LOCAL", "")
-            if not tipo_local:
-                tipo_local = row_df.get("Tipo Local", "")
-            if not tipo_local:
-                tipo_local = row_df.get("TIPO_LOCAL", "")
-
-            zona_nrel = obtener_zona_nrel_por_cc_pdbt(
-                centro,
-                climate_mapping_df
-            )
-
-            perfil_code, perfil_nombre = obtener_tipo_perfil_nrel_pdbt(
-                subgiro,
-                tipo_local
-            )
-
-            profile_path = resolver_profile_path_nrel(
-                profiles_dir=profiles_dir,
-                zona_nrel=zona_nrel,
-                perfil_code=perfil_code
-            )
-
-            if profile_path is not None:
-                kw_estimado = estimar_kwmax_pdbt_desde_nrel(
-                    kwh_total=float(kwh_total),
-                    periodo_inicio=pd.Timestamp("2026-01-01"),
-                    periodo_fin=pd.Timestamp("2026-01-31"),
-                    profile_path=Path(profile_path)
-                )
-
-                if pd.notna(kw_estimado) and float(kw_estimado) > 0:
-                    return kw_estimado
-
-        except Exception:
-            pass
-
-        # Fallback defensivo si no existe perfil NREL o falla la lectura.
-        # Supone un factor de carga 0.25 para convertir energía mensual a kW pico.
-        return float(kwh_total) / (31 * 24 * 0.25)
-
-    # Liverpool / Ambar: usar kwmax directo del CSV especial.
-    kw_liverpool_ambar = _rescatar_numero_especial_desde_csv(
-        lambda s: s.str.contains("AMBAR", na=False) & s.str.contains("LIVERPOOL", na=False),
-        "kwmax"
-    )
-
-    if pd.notna(kw_liverpool_ambar):
-        mask_liverpool_ambar_df = (
-            df["_cc_key_reporte"].fillna("").astype(str).str.upper().str.contains("AMBAR", na=False)
-            & df["Nombre Comercial"].fillna("").astype(str).str.upper().str.contains("LIVERPOOL", na=False)
-        )
-
-        df.loc[mask_liverpool_ambar_df, "demanda_maxima_anual_kw"] = kw_liverpool_ambar
-        df.loc[mask_liverpool_ambar_df, "Demanda máxima anual (kW)"] = kw_liverpool_ambar
-        df.loc[mask_liverpool_ambar_df, "Tarifa"] = "GDMTH"
-        df.loc[mask_liverpool_ambar_df, "tarifa_norm"] = "GDMTH"
-        df.loc[mask_liverpool_ambar_df, "criterio_union_demanda"] = "CSV especial Liverpool / Ambar"
-        df.loc[mask_liverpool_ambar_df, "estatus_demanda"] = "Calculada con kwmax CSV especial"
-
-    # Top Mart / Pabellón Navojoa: usar kWh del CSV y estimar PDBT.
-    kwh_topmart = _rescatar_numero_especial_desde_csv(
-        lambda s: s.str.contains("TOPMART", na=False) | s.str.contains("TOP MART", na=False),
-        "kwh_total"
-    )
-
-    mask_topmart_df = (
-        df["_cc_key_reporte"].fillna("").astype(str).str.upper().str.contains("PABELLON NAVOJOA", na=False)
-        & df["Nombre Comercial"].fillna("").astype(str).str.upper().str.contains("TOP", na=False)
-        & df["Nombre Comercial"].fillna("").astype(str).str.upper().str.contains("MART", na=False)
-    )
-
-    if pd.notna(kwh_topmart) and mask_topmart_df.any():
-        for idx_top in df[mask_topmart_df].index:
-            kw_top = _estimar_demanda_pdbt_especial(kwh_topmart, df.loc[idx_top])
-            if pd.notna(kw_top):
-                df.at[idx_top, "demanda_maxima_anual_kw"] = kw_top
-                df.at[idx_top, "Demanda máxima anual (kW)"] = kw_top
-                df.at[idx_top, "kwh_12m"] = kwh_topmart
-                df.at[idx_top, "meses_con_demanda"] = 1
-                df.at[idx_top, "Tarifa"] = "PDBT"
-                df.at[idx_top, "tarifa_norm"] = "PDBT"
-                df.at[idx_top, "criterio_union_demanda"] = "CSV especial Top Mart"
-                df.at[idx_top, "estatus_demanda"] = "Estimada PDBT con kWh CSV especial"
-
-    # MOM & SON'S / Midtown Jalisco: el archivo viene como MYA/MYA.pdf.
-    kwh_mom_sons = _rescatar_numero_especial_desde_csv(
-        lambda s: (
-            s.str.contains("MYA", na=False)
-            | (
-                s.str.contains("MOM", na=False)
-                & s.str.contains("SON", na=False)
-            )
-        ),
-        "kwh_total"
-    )
-
-    mask_mom_sons_df = (
-        df["_cc_key_reporte"].fillna("").astype(str).str.upper().str.contains("MIDTOWN", na=False)
-        & (
-            df["Nombre Comercial"].fillna("").astype(str).str.upper().str.contains("MOM", na=False)
-            | df["Nombre Comercial"].fillna("").astype(str).str.upper().str.contains("SON", na=False)
-            | df["Nombre Comercial"].fillna("").astype(str).str.upper().str.contains("MYA", na=False)
-        )
-    )
-
-    if pd.notna(kwh_mom_sons) and mask_mom_sons_df.any():
-        for idx_mom in df[mask_mom_sons_df].index:
-            kw_mom = _estimar_demanda_pdbt_especial(kwh_mom_sons, df.loc[idx_mom])
-            if pd.notna(kw_mom):
-                df.at[idx_mom, "demanda_maxima_anual_kw"] = kw_mom
-                df.at[idx_mom, "Demanda máxima anual (kW)"] = kw_mom
-                df.at[idx_mom, "kwh_12m"] = kwh_mom_sons
-                df.at[idx_mom, "meses_con_demanda"] = 1
-                df.at[idx_mom, "Tarifa"] = "PDBT"
-                df.at[idx_mom, "tarifa_norm"] = "PDBT"
-                df.at[idx_mom, "criterio_union_demanda"] = "CSV especial MYA / Mom & Son's"
-                df.at[idx_mom, "estatus_demanda"] = "Estimada PDBT con kWh CSV especial"
-
-    # --------------------------------------------------------
-    # Refuerzo general por medidor / no_servicio / nombre
-    # --------------------------------------------------------
-    # Algunos locales sí tienen match correcto con el parser por medidor
-    # o por cliente + medidor, pero la demanda anual no llegó a la base
-    # porque el parser tenía varias filas/periodos o porque el CC visual
-    # no coincidía exactamente. Este bloque rescata:
-    # - kwmax para GDMTH/GDMTO/GDBT
-    # - kWh para PDBT y estima demanda máxima con NREL/fallback
-
-    def _service_key_sin_ceros(value):
-        if pd.isna(value):
-            return ""
-        s = str(value).strip()
-        s = re.sub(r"\.0$", "", s)
-        s = re.sub(r"\D", "", s)
-        s = s.lstrip("0")
-        return s
-
-    def _texto_match_simple(value):
-        return normalize_brand_name(value)
-
-    def _series_num_max(df_in, cols):
-        vals = []
-        for c in cols:
-            if c in df_in.columns:
-                vals.append(pd.to_numeric(df_in[c], errors="coerce"))
-        if not vals:
-            return pd.NA
-        s = pd.concat(vals, ignore_index=True).dropna()
-        s = s[s > 0]
-        if s.empty:
-            return pd.NA
-        return float(s.max())
-
-    parser_refuerzo = parsed.copy()
-
-    if not parser_refuerzo.empty:
-        if "mall_folder" in parser_refuerzo.columns:
-            parser_refuerzo["_cc_key_refuerzo"] = parser_refuerzo["mall_folder"].apply(cc_key)
-        else:
-            parser_refuerzo["_cc_key_refuerzo"] = ""
-
-        if "file_path" in parser_refuerzo.columns:
-            parser_refuerzo["_cc_desde_path_refuerzo"] = parser_refuerzo["file_path"].apply(extraer_cc_desde_path)
-            mask_cc_path_ref = parser_refuerzo["_cc_desde_path_refuerzo"].fillna("").astype(str).str.strip().ne("")
-            parser_refuerzo.loc[
-                mask_cc_path_ref,
-                "_cc_key_refuerzo"
-            ] = parser_refuerzo.loc[
-                mask_cc_path_ref,
-                "_cc_desde_path_refuerzo"
-            ].apply(cc_key)
-
-        if "medidor" in parser_refuerzo.columns:
-            parser_refuerzo["_key_medidor_refuerzo"] = normalize_meter_cc(parser_refuerzo["medidor"])
-        else:
-            parser_refuerzo["_key_medidor_refuerzo"] = ""
-
-        if "no_servicio" in parser_refuerzo.columns:
-            parser_refuerzo["_key_servicio_refuerzo"] = normalize_service_cc(parser_refuerzo["no_servicio"])
-            parser_refuerzo["_key_servicio_sin_ceros_refuerzo"] = parser_refuerzo["no_servicio"].apply(_service_key_sin_ceros)
-        else:
-            parser_refuerzo["_key_servicio_refuerzo"] = ""
-            parser_refuerzo["_key_servicio_sin_ceros_refuerzo"] = ""
-
-        if "cliente_nombre" in parser_refuerzo.columns:
-            parser_refuerzo["_key_cliente_refuerzo"] = parser_refuerzo["cliente_nombre"].apply(_texto_match_simple)
-        else:
-            parser_refuerzo["_key_cliente_refuerzo"] = ""
-
-        if "recibos_subgroup" in parser_refuerzo.columns:
-            parser_refuerzo["_key_nombre_refuerzo"] = parser_refuerzo["recibos_subgroup"].apply(_texto_match_simple)
-        else:
-            parser_refuerzo["_key_nombre_refuerzo"] = ""
-
-        if "tarifa_norm" not in parser_refuerzo.columns:
-            tarifa_ref_col = first_existing_column(parser_refuerzo, ["tarifa", "Tarifa", "TARIFA_FINAL"])
-            if tarifa_ref_col:
-                parser_refuerzo["tarifa_norm"] = normalize_tarifa_series(parser_refuerzo[tarifa_ref_col])
-            else:
-                parser_refuerzo["tarifa_norm"] = pd.NA
-
-        if "kwh_total_num" not in parser_refuerzo.columns and "kwh_total" in parser_refuerzo.columns:
-            parser_refuerzo["kwh_total_num"] = pd.to_numeric(parser_refuerzo["kwh_total"], errors="coerce")
-
-        if "kwmax_num" not in parser_refuerzo.columns and "kwmax" in parser_refuerzo.columns:
-            parser_refuerzo["kwmax_num"] = pd.to_numeric(parser_refuerzo["kwmax"], errors="coerce")
-
-        # Asegurar llaves equivalentes en la base final.
-        if "_key_medidor_refuerzo_final" not in df.columns:
-            if "medidor" in df.columns:
-                df["_key_medidor_refuerzo_final"] = normalize_meter_cc(df["medidor"])
-            elif "parser_medidor_match" in df.columns:
-                df["_key_medidor_refuerzo_final"] = normalize_meter_cc(df["parser_medidor_match"])
-            else:
-                df["_key_medidor_refuerzo_final"] = ""
-
-        if "_key_servicio_sin_ceros_final" not in df.columns:
-            if "no_servicio" in df.columns:
-                df["_key_servicio_sin_ceros_final"] = df["no_servicio"].apply(_service_key_sin_ceros)
-            elif "parser_no_servicio_match" in df.columns:
-                df["_key_servicio_sin_ceros_final"] = df["parser_no_servicio_match"].apply(_service_key_sin_ceros)
-            else:
-                df["_key_servicio_sin_ceros_final"] = ""
-
-        if "_key_cliente_refuerzo_final" not in df.columns:
-            df["_key_cliente_refuerzo_final"] = (
-                df["CLIENTE"].apply(_texto_match_simple)
-                if "CLIENTE" in df.columns
-                else ""
-            )
-
-        if "_key_nombre_refuerzo_final" not in df.columns:
-            df["_key_nombre_refuerzo_final"] = (
-                df["Nombre Comercial"].apply(_texto_match_simple)
-                if "Nombre Comercial" in df.columns
-                else ""
-            )
-
-        # Columnas de diagnóstico directo.
-        for cdiag in [
-            "Fuente diagnóstico",
-            "file_path diagnóstico",
-            "kWh total diagnóstico",
-            "kwmax diagnóstico",
-            "Demanda contratada diagnóstico",
-            "Cliente parser/rescate",
-            "Medidor parser/rescate",
-            "Tarifa diagnóstico",
-            "No. servicio diagnóstico"
-        ]:
-            if cdiag not in df.columns:
-                df[cdiag] = pd.NA
-
-        mask_falta_demanda_refuerzo = (
-            df["Demanda máxima anual (kW)"].isna()
-            | (pd.to_numeric(df["Demanda máxima anual (kW)"], errors="coerce") <= 0)
-        )
-
-        for idx_ref, row_ref in df[mask_falta_demanda_refuerzo].iterrows():
-            candidatos = parser_refuerzo.copy()
-
-            key_med = str(row_ref.get("_key_medidor_refuerzo_final", "")).strip().upper()
-            key_serv = str(row_ref.get("_key_servicio_sin_ceros_final", "")).strip()
-            key_cc = str(row_ref.get("_cc_key_reporte", "")).strip().upper()
-            key_cliente = str(row_ref.get("_key_cliente_refuerzo_final", "")).strip()
-            key_nombre = str(row_ref.get("_key_nombre_refuerzo_final", "")).strip()
-
-            # ------------------------------------------------------------
-            # Regla conservadora de refuerzo de demanda
-            # ------------------------------------------------------------
-            # IMPORTANTE:
-            # - Un local puede tener más de un MEDIDOR durante el año.
-            # - Pero no debe mezclar diferentes NO. SERVICIO.
-            #
-            # Por eso, si el local ya tiene no_servicio, el refuerzo SOLO puede
-            # usar filas del parser/rescates con ese mismo no_servicio
-            # normalizado (sin ceros iniciales). El medidor no puede traer datos
-            # de otro no_servicio.
-            #
-            # Si el local NO tiene no_servicio, entonces el medidor solo se usa
-            # si apunta a un único no_servicio en el parser/rescates. Si el
-            # medidor aparece asociado a varios servicios, se deja vacío y se
-            # reporta en diagnóstico para revisión manual.
-
-            match_origen_refuerzo = ""
-
-            if key_serv:
-                candidatos = candidatos[
-                    candidatos["_key_servicio_sin_ceros_refuerzo"].astype(str).eq(key_serv)
-                ].copy()
-                match_origen_refuerzo = "no_servicio"
-
-                # Si además hay medidor, lo usamos solo como preferencia dentro
-                # del mismo no_servicio, no como llave para traer otros servicios.
-                if not candidatos.empty and key_med and key_med not in ["NAN", "NONE", "<NA>"]:
-                    cand_mismo_med = candidatos[
-                        candidatos["_key_medidor_refuerzo"].astype(str).str.upper().eq(key_med)
-                    ].copy()
-                    if not cand_mismo_med.empty:
-                        candidatos = cand_mismo_med
-
-            else:
-                # DG NO trae no_servicio de origen. Por eso el refuerzo debe
-                # funcionar como OR conservador:
-                #   medidor OR (CC + cliente/nombre comercial) OR (nombre muy específico)
-                # El resultado permitido NO es copiar demanda por cualquiera de esas
-                # llaves, sino resolver primero a un único no_servicio del parser.
-                candidatos_or = []
-                origenes_or = []
-
-                if key_med and key_med not in ["NAN", "NONE", "<NA>"]:
-                    cand_med = candidatos[
-                        candidatos["_key_medidor_refuerzo"].astype(str).str.upper().eq(key_med)
-                    ].copy()
-                    if not cand_med.empty:
-                        candidatos_or.append(cand_med)
-                        origenes_or.append("medidor")
-
-                if key_cliente or key_nombre:
-                    cand_nombre = candidatos.copy()
-
-                    # Si conocemos el CC, usarlo para acotar. Si no, dejamos
-                    # el nombre como posible, pero solo se aceptará si resuelve
-                    # a un único no_servicio.
-                    if key_cc:
-                        cand_cc_nombre = cand_nombre[
-                            cand_nombre["_cc_key_refuerzo"].fillna("").astype(str).str.upper().eq(key_cc)
-                        ].copy()
-                        if not cand_cc_nombre.empty:
-                            cand_nombre = cand_cc_nombre
-
-                    cand_nombre = cand_nombre[
-                        cand_nombre["_key_cliente_refuerzo"].apply(
-                            lambda x: has_partial_match_cc(key_cliente, [x]) if key_cliente else False
-                        )
-                        | cand_nombre["_key_nombre_refuerzo"].apply(
-                            lambda x: has_partial_match_cc(key_nombre, [x]) if key_nombre else False
-                        )
-                        | cand_nombre["_key_cliente_refuerzo"].apply(
-                            lambda x: has_partial_match_cc(key_nombre, [x]) if key_nombre else False
-                        )
-                        | cand_nombre["_key_nombre_refuerzo"].apply(
-                            lambda x: has_partial_match_cc(key_cliente, [x]) if key_cliente else False
-                        )
-                    ].copy()
-
-                    if not cand_nombre.empty:
-                        candidatos_or.append(cand_nombre)
-                        origenes_or.append("CC+nombre/cliente" if key_cc else "nombre/cliente")
-
-                if candidatos_or:
-                    candidatos = pd.concat(candidatos_or, ignore_index=False).drop_duplicates().copy()
-                    match_origen_refuerzo = " OR ".join(origenes_or)
-                else:
-                    continue
-
-            if candidatos.empty:
-                continue
-
-            # Si hay candidatos del mismo CC, preferirlos. Esto ayuda cuando el
-            # mismo medidor aparece en más de un servicio histórico, pero solo
-            # uno corresponde al CC del local.
-            if key_cc:
-                cand_mismo_cc = candidatos[
-                    candidatos["_cc_key_refuerzo"].fillna("").astype(str).str.upper().eq(key_cc)
-                ].copy()
-                if not cand_mismo_cc.empty:
-                    candidatos = cand_mismo_cc
-
-            # Si hay candidatos que además coinciden con cliente/nombre, preferirlos.
-            if key_cliente or key_nombre:
-                cand_match_nombre = candidatos[
-                    candidatos["_key_cliente_refuerzo"].apply(
-                        lambda x: has_partial_match_cc(key_cliente, [x]) if key_cliente else False
-                    )
-                    | candidatos["_key_nombre_refuerzo"].apply(
-                        lambda x: has_partial_match_cc(key_nombre, [x]) if key_nombre else False
-                    )
-                    | candidatos["_key_cliente_refuerzo"].apply(
-                        lambda x: has_partial_match_cc(key_nombre, [x]) if key_nombre else False
-                    )
-                    | candidatos["_key_nombre_refuerzo"].apply(
-                        lambda x: has_partial_match_cc(key_cliente, [x]) if key_cliente else False
-                    )
-                ].copy()
-
-                if not cand_match_nombre.empty:
-                    candidatos = cand_match_nombre
-
-            # Si el local NO tenía no_servicio, validar aquí la unicidad
-            # del no_servicio después de aplicar el OR conservador
-            # (medidor OR CC+nombre/cliente).
-            if not key_serv:
-                servicios_candidatos = (
-                    candidatos["_key_servicio_sin_ceros_refuerzo"]
-                    .fillna("")
-                    .astype(str)
-                    .str.strip()
-                )
-                servicios_candidatos = servicios_candidatos[
-                    ~servicios_candidatos.isin(["", "NAN", "NONE", "<NA>"])
-                ].unique()
-
-                if len(servicios_candidatos) > 1:
-                    df.at[idx_ref, "Fuente diagnóstico"] = f"match ambiguo por {match_origen_refuerzo}: varios no_servicio"
-                    if "file_path" in candidatos.columns:
-                        df.at[idx_ref, "file_path diagnóstico"] = join_unique_debug(candidatos["file_path"])
-                    if "no_servicio" in candidatos.columns:
-                        df.at[idx_ref, "No. servicio diagnóstico"] = join_unique_debug(candidatos["no_servicio"])
-                    continue
-
-                if len(servicios_candidatos) == 1:
-                    # Asignar el no_servicio más completo disponible (preferir 12+ dígitos)
-                    # como valor final del local, pero solo después de confirmar unicidad.
-                    if "no_servicio" in candidatos.columns:
-                        servicios_raw = (
-                            candidatos["no_servicio"]
-                            .dropna()
-                            .astype(str)
-                            .map(lambda x: re.sub(r"\.0$", "", x.strip()))
-                            .map(lambda x: re.sub(r"\D", "", x))
-                        )
-                        servicios_raw = servicios_raw[servicios_raw.str.len() > 0]
-                        if not servicios_raw.empty:
-                            servicios_raw = servicios_raw.drop_duplicates()
-                            servicios_raw = servicios_raw.sort_values(
-                                key=lambda s: s.str.len(),
-                                ascending=False
-                            )
-                            servicio_preferido = servicios_raw.iloc[0]
-                            if "no_servicio" in df.columns:
-                                df.at[idx_ref, "no_servicio"] = servicio_preferido
-                            if "parser_no_servicio_match" in df.columns:
-                                df.at[idx_ref, "parser_no_servicio_match"] = servicio_preferido
-                            df.at[idx_ref, "No. servicio diagnóstico"] = servicio_preferido
-                            df.at[idx_ref, "criterio_union_demanda"] = f"{match_origen_refuerzo} → no_servicio único"
-                            key_serv = _service_key_sin_ceros(servicio_preferido)
-
-            # Cálculo de demanda desde lo que exista en parser/rescates.
-            kw_directo = _series_num_max(
-                candidatos,
-                [
-                    "demanda_maxima_anual_kw",
-                    "demanda_maxima_mensual_kw",
-                    "kwmax_num",
-                    "kwmax"
-                ]
-            )
-
-            kwh_ref = _series_num_max(
-                candidatos,
-                [
-                    "kwh_12m",
-                    "kwh_total_num",
-                    "kwh_total"
-                ]
-            )
-
-            tarifa_ref = join_unique_debug(candidatos["tarifa_norm"]) if "tarifa_norm" in candidatos.columns else pd.NA
-            tarifa_ref_norm = normalize_tarifa_value(tarifa_ref) if pd.notna(tarifa_ref) else row_ref.get("Tarifa", pd.NA)
-
-            kw_final = kw_directo
-
-            if (
-                (pd.isna(kw_final) or float(kw_final) <= 0)
-                and pd.notna(kwh_ref)
-                and str(tarifa_ref_norm).upper().strip() == "PDBT"
-            ):
-                kw_final = _estimar_demanda_pdbt_especial(kwh_ref, row_ref)
-
-            if pd.isna(kw_final) or float(kw_final) <= 0:
-                # No hay dato útil suficiente, pero dejamos diagnóstico.
-                pass
-            else:
-                df.at[idx_ref, "demanda_maxima_anual_kw"] = kw_final
-                df.at[idx_ref, "Demanda máxima anual (kW)"] = kw_final
-
-                if "tarifa_norm" in df.columns and pd.notna(tarifa_ref_norm):
-                    df.at[idx_ref, "tarifa_norm"] = tarifa_ref_norm
-                if "Tarifa" in df.columns and pd.notna(tarifa_ref_norm):
-                    df.at[idx_ref, "Tarifa"] = tarifa_ref_norm
-
-                if pd.notna(kwh_ref):
-                    df.at[idx_ref, "kwh_12m"] = kwh_ref
-
-                df.at[idx_ref, "criterio_union_demanda"] = (
-                    "Refuerzo parser conservador por no_servicio"
-                    if key_serv and not match_origen_refuerzo
-                    else f"Refuerzo parser conservador por {match_origen_refuerzo or 'no_servicio'}"
-                )
-                df.at[idx_ref, "estatus_demanda"] = (
-                    "Calculada con kwmax parser/rescate"
-                    if pd.notna(kw_directo)
-                    else "Estimada PDBT con kWh parser/rescate"
-                )
-
-            # Diagnóstico visible para entender de dónde salió o por qué no salió.
-            if "file_path" in candidatos.columns:
-                df.at[idx_ref, "file_path diagnóstico"] = join_unique_debug(candidatos["file_path"])
-            if "cliente_nombre" in candidatos.columns:
-                df.at[idx_ref, "Cliente parser/rescate"] = join_unique_debug(candidatos["cliente_nombre"])
-            if "medidor" in candidatos.columns:
-                df.at[idx_ref, "Medidor parser/rescate"] = join_unique_debug(candidatos["medidor"])
-            if "tarifa_norm" in candidatos.columns:
-                df.at[idx_ref, "Tarifa diagnóstico"] = join_unique_debug(candidatos["tarifa_norm"])
-
-            df.at[idx_ref, "Fuente diagnóstico"] = f"parser/refuerzo {match_origen_refuerzo or 'no_servicio'}"
-
-            if pd.notna(kwh_ref):
-                df.at[idx_ref, "kWh total diagnóstico"] = kwh_ref
-            if pd.notna(kw_directo):
-                df.at[idx_ref, "kwmax diagnóstico"] = kw_directo
-
-            if "demanda_contratada_kw" in candidatos.columns:
-                demanda_contratada_ref = _series_num_max(candidatos, ["demanda_contratada_kw"])
-                if pd.notna(demanda_contratada_ref):
-                    df.at[idx_ref, "Demanda contratada diagnóstico"] = demanda_contratada_ref
-                    if "demanda_contratada_kw" in df.columns:
-                        valor_actual_contratada = pd.to_numeric(
-                            pd.Series([df.at[idx_ref, "demanda_contratada_kw"]]),
-                            errors="coerce"
-                        ).iloc[0]
-                        if pd.isna(valor_actual_contratada) or valor_actual_contratada <= 0:
-                            df.at[idx_ref, "demanda_contratada_kw"] = demanda_contratada_ref
-
-            # Si el parser tiene un CC claro desde file_path y el visual estaba mal,
-            # corregir el CC final.
-            if "file_path" in candidatos.columns:
-                cc_candidates = candidatos["file_path"].apply(extraer_cc_desde_path)
-                cc_candidates = cc_candidates.dropna().astype(str)
-                cc_candidates = cc_candidates[cc_candidates.str.strip().ne("")]
-                if not cc_candidates.empty:
-                    cc_final_ref = cc_candidates.iloc[0]
-                    df.at[idx_ref, "_cc_key_reporte"] = cc_key(cc_final_ref)
-                    df.at[idx_ref, "_centro_comercial_limpio"] = cc_final_ref
-
-    # Asegurar que Liverpool/Iberdrola quede dentro del mismo Ambar Fashion Mall Tuxtla
-    # en todas las tablas y agrupaciones posteriores.
-    for _cc_col_fix in ["_centro_comercial_limpio", "NOMBRE DEL CC", "source_sheet"]:
-        if _cc_col_fix in df.columns:
-            _mask_ambar_fix = (
-                df[_cc_col_fix]
-                .fillna("")
-                .astype(str)
-                .str.upper()
-                .str.contains("AMBAR", na=False)
-            )
-            df.loc[_mask_ambar_fix, _cc_col_fix] = "Ambar Fashion Mall Tuxtla"
-
-    if "_cc_key_reporte" in df.columns:
-        _mask_ambar_key_fix = (
-            df["_cc_key_reporte"]
-            .fillna("")
-            .astype(str)
-            .str.upper()
-            .str.contains("AMBAR", na=False)
-        )
-        df.loc[_mask_ambar_key_fix, "_cc_key_reporte"] = cc_key("Ambar Fashion Mall Tuxtla")
+        df["Demanda promedio anual (kW)"] = pd.NA
 
     # --------------------------------------------------------
     # Densidad de demanda
@@ -10274,7 +8233,7 @@ def aplicar_calibracion_hibrida_pdbt_allux(
         df,
         [
             "Densidad de demanda W/m2",
-            "densidad_demanda_maxima_anual_w_m2"
+            "densidad_demanda_promedio_anual_w_m2"
         ]
     )
 
@@ -10816,10 +8775,10 @@ def aplicar_calibracion_hibrida_pdbt_allux(
             densidad_col
         ] = densidad_hibrida.values
 
-    if "densidad_demanda_maxima_anual_w_m2" in df.columns:
+    if "densidad_demanda_promedio_anual_w_m2" in df.columns:
         df.loc[
             mask_pdbt_aplicar,
-            "densidad_demanda_maxima_anual_w_m2"
+            "densidad_demanda_promedio_anual_w_m2"
         ] = densidad_hibrida.values
 
     if "Densidad de demanda W/m2" in df.columns:
@@ -10989,12 +8948,6 @@ benchmark_densidad_base, factores_ajuste_allux_pdbt_df = (
         factor_max=4.00
     )
 )
-
-# Corrección final: si el file_path indica otro CC, prevalece el CC del file_path.
-# Después se deduplica por CC + No. servicio normalizado para evitar dobles filas
-# cuando el mismo servicio aparece con/sin cero inicial.
-benchmark_densidad_base = corregir_cc_por_file_path(benchmark_densidad_base)
-benchmark_densidad_base = deduplicar_benchmark_por_cc_servicio(benchmark_densidad_base)
 
 with tab_resumen:
     # ============================================================
@@ -11256,441 +9209,31 @@ with tab_resumen:
             errors="coerce"
         ).sum(skipna=True)
 
-    demanda_promedio_anual_total_kw = pd.NA
+    demanda_maxima_anual_total_kw = pd.NA
 
     if (
         "benchmark_densidad_base" in globals()
         and not benchmark_densidad_base.empty
     ):
         if "demanda_maxima_anual_kw" in benchmark_densidad_base.columns:
-            demanda_promedio_anual_total_kw = pd.to_numeric(
+            demanda_maxima_anual_total_kw = pd.to_numeric(
                 benchmark_densidad_base["demanda_maxima_anual_kw"],
+                errors="coerce"
+            ).sum(skipna=True)
+        elif "Demanda máxima anual (kW)" in benchmark_densidad_base.columns:
+            demanda_maxima_anual_total_kw = pd.to_numeric(
+                benchmark_densidad_base["Demanda máxima anual (kW)"],
                 errors="coerce"
             ).sum(skipna=True)
 
     # ------------------------------------------------------------
-    # Métricas ejecutivas
+    # Tarjetas principales
     # ------------------------------------------------------------
-    # Las métricas de ocupación y cobertura excluyen Servicios Generales.
-
-    ocupacion_locales_pct = (
-        locales_ocupados_total / total_locales_dg * 100
-        if total_locales_dg > 0
-        else pd.NA
-    )
-
-    # Base de muestra con recibo excluyendo Servicios Generales.
-    muestra_con_recibo_sin_sg = pd.DataFrame()
-
-    if (
-        "muestra_con_recibo_global" in globals()
-        and not muestra_con_recibo_global.empty
-    ):
-        muestra_con_recibo_sin_sg = muestra_con_recibo_global.copy()
-
-        giro_col_muestra_resumen = first_existing_column(
-            muestra_con_recibo_sin_sg,
-            [
-                "Giro comercial densidad",
-                "SUBGIRO_COMERCIAL",
-                "SUBGIRO COMERCIAL",
-                "GIRO_COMERCIAL",
-                "GIRO COMERCIAL",
-                "GIRO",
-                "Giro"
-            ]
-        )
-
-        if giro_col_muestra_resumen:
-            giro_muestra_resumen = (
-                muestra_con_recibo_sin_sg[giro_col_muestra_resumen]
-                .fillna("")
-                .astype(str)
-                .str.upper()
-                .str.strip()
-            )
-
-            mask_sg_muestra_resumen = (
-                giro_muestra_resumen.str.contains("SERVICIOS GENERALES", na=False)
-                | giro_muestra_resumen.str.contains("SERVICIO GENERAL", na=False)
-            )
-
-            muestra_con_recibo_sin_sg = muestra_con_recibo_sin_sg[
-                ~mask_sg_muestra_resumen
-            ].copy()
-
-    locales_ocupados_con_recibo_sin_sg_total = (
-        len(muestra_con_recibo_sin_sg)
-        if not muestra_con_recibo_sin_sg.empty
-        else locales_ocupados_con_recibo_total
-    )
 
     cobertura_muestra_pct = (
-        locales_ocupados_con_recibo_sin_sg_total / locales_ocupados_total * 100
+        locales_ocupados_con_recibo_total / locales_ocupados_total * 100
         if locales_ocupados_total > 0
         else pd.NA
-    )
-
-    # ------------------------------------------------------------
-    # Métricas por m², excluyendo Servicios Generales
-    # ------------------------------------------------------------
-
-    area_col_resumen = first_existing_column(
-        resumen_general_sin_sg,
-        [
-            "AREA_M2_num",
-            "AREA M2_num",
-            "SUPERFICIE_num",
-            "SUPERFICIE M2_num",
-            "MTS2",
-            "M2",
-            "m2",
-            "MTS 2",
-            "MTS²",
-            "AREA_M2",
-            "AREA M2",
-            "SUPERFICIE",
-            "SUPERFICIE M2",
-            "Área",
-            "Area",
-            "AREA",
-            "Superficie"
-        ]
-    )
-
-    if area_col_resumen:
-        area_total_sin_sg_m2 = clean_number_series(
-            resumen_general_sin_sg[area_col_resumen]
-        ).sum(skipna=True)
-
-        area_ocupada_sin_sg_m2 = clean_number_series(
-            resumen_general_sin_sg.loc[
-                cliente_valido_resumen | nombre_valido_resumen,
-                area_col_resumen
-            ]
-        ).sum(skipna=True)
-    else:
-        area_total_sin_sg_m2 = pd.NA
-        area_ocupada_sin_sg_m2 = pd.NA
-
-    area_col_muestra_resumen = (
-        first_existing_column(
-            muestra_con_recibo_sin_sg,
-            [
-                "Area m2",
-                "Área m2",
-                "AREA_M2_num",
-                "AREA M2_num",
-                "MTS2",
-                "M2",
-                "m2",
-                "AREA_M2",
-                "AREA M2"
-            ]
-        )
-        if not muestra_con_recibo_sin_sg.empty
-        else None
-    )
-
-    if area_col_muestra_resumen:
-        area_ocupada_con_recibo_sin_sg_m2 = clean_number_series(
-            muestra_con_recibo_sin_sg[area_col_muestra_resumen]
-        ).sum(skipna=True)
-    elif (
-        "benchmark_densidad_base" in globals()
-        and not benchmark_densidad_base.empty
-    ):
-        benchmark_area_resumen = benchmark_densidad_base.copy()
-
-        giro_col_benchmark_area = first_existing_column(
-            benchmark_area_resumen,
-            [
-                "Giro comercial densidad",
-                "SUBGIRO_COMERCIAL",
-                "GIRO_COMERCIAL",
-                "GIRO",
-                "Giro"
-            ]
-        )
-
-        if giro_col_benchmark_area:
-            mask_sg_benchmark_area = (
-                benchmark_area_resumen[giro_col_benchmark_area]
-                .fillna("")
-                .astype(str)
-                .str.upper()
-                .str.strip()
-                .str.contains(r"SERVICIO[S]?\s+GENERAL(ES)?", regex=True, na=False)
-            )
-
-            benchmark_area_resumen = benchmark_area_resumen[
-                ~mask_sg_benchmark_area
-            ].copy()
-
-        area_col_benchmark_area = first_existing_column(
-            benchmark_area_resumen,
-            [
-                "Area m2",
-                "Área m2",
-                "area_benchmark_m2",
-                "MTS2",
-                "M2",
-                "m2"
-            ]
-        )
-
-        area_ocupada_con_recibo_sin_sg_m2 = (
-            clean_number_series(benchmark_area_resumen[area_col_benchmark_area]).sum(skipna=True)
-            if area_col_benchmark_area
-            else pd.NA
-        )
-    else:
-        area_ocupada_con_recibo_sin_sg_m2 = pd.NA
-
-    ocupacion_m2_pct = (
-        area_ocupada_sin_sg_m2 / area_total_sin_sg_m2 * 100
-        if pd.notna(area_total_sin_sg_m2) and area_total_sin_sg_m2 > 0
-        else pd.NA
-    )
-
-    cobertura_m2_pct = (
-        area_ocupada_con_recibo_sin_sg_m2 / area_ocupada_sin_sg_m2 * 100
-        if pd.notna(area_ocupada_sin_sg_m2) and area_ocupada_sin_sg_m2 > 0
-        else pd.NA
-    )
-
-    # ------------------------------------------------------------
-    # Métricas de Servicios Generales
-    # ------------------------------------------------------------
-
-    sg_total_servicios_resumen = pd.NA
-    sg_total_demanda_contratada_resumen = pd.NA
-    sg_total_demanda_maxima_resumen = pd.NA
-    sg_total_facturacion_resumen = pd.NA
-    sg_total_kwh_resumen = pd.NA
-    sg_costo_promedio_resumen = pd.NA
-
-    if (
-        "benchmark_densidad_base" in globals()
-        and not benchmark_densidad_base.empty
-    ):
-        sg_metricas_base = benchmark_densidad_base.copy()
-
-        giro_col_sg_metricas = first_existing_column(
-            sg_metricas_base,
-            [
-                "Giro comercial densidad",
-                "SUBGIRO_COMERCIAL",
-                "SUBGIRO COMERCIAL",
-                "GIRO_COMERCIAL",
-                "GIRO COMERCIAL",
-                "GIRO",
-                "Giro"
-            ]
-        )
-
-        if giro_col_sg_metricas:
-            mask_sg_metricas = (
-                sg_metricas_base[giro_col_sg_metricas]
-                .fillna("")
-                .astype(str)
-                .str.upper()
-                .str.strip()
-                .str.contains(r"SERVICIO[S]?\s+GENERAL(ES)?", regex=True, na=False)
-            )
-
-            sg_metricas_base = sg_metricas_base[mask_sg_metricas].copy()
-
-        if not sg_metricas_base.empty:
-            servicio_col_sg_metricas = first_existing_column(
-                sg_metricas_base,
-                [
-                    "parser_no_servicio_match",
-                    "no_servicio",
-                    "No. servicio",
-                    "No servicio"
-                ]
-            )
-
-            if servicio_col_sg_metricas:
-                sg_servicios_key = normalize_service_cc(
-                    sg_metricas_base[servicio_col_sg_metricas]
-                )
-                sg_total_servicios_resumen = int(
-                    sg_servicios_key[sg_servicios_key.ne("")].nunique()
-                )
-            else:
-                sg_servicios_key = pd.Series("", index=sg_metricas_base.index)
-                sg_total_servicios_resumen = len(sg_metricas_base)
-
-            demanda_contratada_col_sg_metricas = first_existing_column(
-                sg_metricas_base,
-                [
-                    "demanda_contratada_kw",
-                    "Demanda contratada kW",
-                    "Demanda Contratada (kW)"
-                ]
-            )
-
-            if demanda_contratada_col_sg_metricas:
-                sg_total_demanda_contratada_resumen = pd.to_numeric(
-                    sg_metricas_base[demanda_contratada_col_sg_metricas],
-                    errors="coerce"
-                ).sum(skipna=True)
-
-            demanda_max_col_sg_metricas = first_existing_column(
-                sg_metricas_base,
-                [
-                    "demanda_maxima_anual_kw",
-                    "Demanda máxima anual (kW)",
-                    "Demanda maxima anual (kW)"
-                ]
-            )
-
-            if demanda_max_col_sg_metricas:
-                sg_total_demanda_maxima_resumen = pd.to_numeric(
-                    sg_metricas_base[demanda_max_col_sg_metricas],
-                    errors="coerce"
-                ).sum(skipna=True)
-
-            # Facturación y kWh de SG desde el parser, cruzando por no_servicio.
-            if (
-                "parsed" in globals()
-                and not parsed.empty
-                and servicio_col_sg_metricas
-            ):
-                parsed_servicio_col_sg = first_existing_column(
-                    parsed,
-                    [
-                        "no_servicio",
-                        "No. servicio",
-                        "No servicio",
-                        "servicio"
-                    ]
-                )
-
-                if parsed_servicio_col_sg:
-                    servicios_sg_set = set(
-                        sg_servicios_key[sg_servicios_key.ne("")].astype(str)
-                    )
-
-                    parsed_sg_metricas = parsed[
-                        normalize_service_cc(parsed[parsed_servicio_col_sg]).isin(servicios_sg_set)
-                    ].copy()
-
-                    if not parsed_sg_metricas.empty:
-                        if "importe_total_num" in parsed_sg_metricas.columns:
-                            sg_total_facturacion_resumen = pd.to_numeric(
-                                parsed_sg_metricas["importe_total_num"],
-                                errors="coerce"
-                            ).sum(skipna=True)
-
-                        if "kwh_total_num" in parsed_sg_metricas.columns:
-                            sg_total_kwh_resumen = pd.to_numeric(
-                                parsed_sg_metricas["kwh_total_num"],
-                                errors="coerce"
-                            ).sum(skipna=True)
-
-            sg_costo_promedio_resumen = (
-                sg_total_facturacion_resumen / sg_total_kwh_resumen
-                if pd.notna(sg_total_facturacion_resumen)
-                and pd.notna(sg_total_kwh_resumen)
-                and sg_total_kwh_resumen > 0
-                else pd.NA
-            )
-
-    # ------------------------------------------------------------
-    # Diagnósticos temporales de métricas ejecutivas
-    # ------------------------------------------------------------
-
-    diag_locales_demanda_contratada = pd.NA
-    diag_locales_demanda_maxima = pd.NA
-
-    if (
-        "benchmark_densidad_base" in globals()
-        and not benchmark_densidad_base.empty
-    ):
-        diag_demanda_base = benchmark_densidad_base.copy()
-
-        giro_col_diag_demanda = first_existing_column(
-            diag_demanda_base,
-            [
-                "Giro comercial densidad",
-                "SUBGIRO_COMERCIAL",
-                "SUBGIRO COMERCIAL",
-                "GIRO_COMERCIAL",
-                "GIRO COMERCIAL",
-                "GIRO",
-                "Giro"
-            ]
-        )
-
-        if giro_col_diag_demanda:
-            mask_sg_diag_demanda = (
-                diag_demanda_base[giro_col_diag_demanda]
-                .fillna("")
-                .astype(str)
-                .str.upper()
-                .str.strip()
-                .str.contains(r"SERVICIO[S]?\s+GENERAL(ES)?", regex=True, na=False)
-            )
-            diag_demanda_base = diag_demanda_base[~mask_sg_diag_demanda].copy()
-
-        dem_contratada_diag_col = first_existing_column(
-            diag_demanda_base,
-            [
-                "demanda_contratada_kw",
-                "Demanda contratada kW",
-                "Demanda Contratada (kW)"
-            ]
-        )
-
-        dem_maxima_diag_col = first_existing_column(
-            diag_demanda_base,
-            [
-                "demanda_maxima_anual_kw",
-                "Demanda máxima anual (kW)",
-                "Demanda maxima anual (kW)"
-            ]
-        )
-
-        if dem_contratada_diag_col:
-            diag_locales_demanda_contratada = int(
-                pd.to_numeric(
-                    diag_demanda_base[dem_contratada_diag_col],
-                    errors="coerce"
-                ).gt(0).sum()
-            )
-
-        if dem_maxima_diag_col:
-            diag_locales_demanda_maxima = int(
-                pd.to_numeric(
-                    diag_demanda_base[dem_maxima_diag_col],
-                    errors="coerce"
-                ).gt(0).sum()
-            )
-
-    diag_sg_locales_facturacion = pd.NA
-    diag_sg_servicios_facturacion = pd.NA
-
-    if "parsed_sg_metricas" in locals() and not parsed_sg_metricas.empty:
-        diag_sg_locales_facturacion = len(parsed_sg_metricas)
-
-        if parsed_servicio_col_sg:
-            diag_sg_servicios_facturacion = int(
-                normalize_service_cc(parsed_sg_metricas[parsed_servicio_col_sg])
-                .replace("", pd.NA)
-                .dropna()
-                .nunique()
-            )
-
-    # ------------------------------------------------------------
-    # Fila 1: Universo de centros comerciales
-    # ------------------------------------------------------------
-
-    st.markdown(
-        '<div class="subsection-title">Universo de centros comerciales</div>',
-        unsafe_allow_html=True
     )
 
     col1, col2, col3, col4, col5 = st.columns(5)
@@ -11711,106 +9254,40 @@ with tab_resumen:
     )
 
     col4.metric(
-        "Ocupación de locales",
-        "—" if pd.isna(ocupacion_locales_pct) else f"{ocupacion_locales_pct:.0f}%"
+        "Locales ocupados con recibo",
+        f"{locales_ocupados_con_recibo_total:,}"
     )
 
     col5.metric(
-        "Ocupación por m²",
-        "—" if pd.isna(ocupacion_m2_pct) else f"{ocupacion_m2_pct:.0f}%"
+        "Cobertura de muestra",
+        "—" if pd.isna(cobertura_muestra_pct) else f"{cobertura_muestra_pct:.1f}%"
     )
 
-    # ------------------------------------------------------------
-    # Fila 2: Muestra
-    # ------------------------------------------------------------
+    col5, col6, col7, col8, col9 = st.columns(5)
 
-    st.markdown(
-        '<div class="subsection-title">Muestra</div>',
-        unsafe_allow_html=True
+    col5.metric(
+        "Consumo total anual (kWh)",
+        format_number(total_kwh_ocupados_con_recibo, 0)
     )
-
-    col6, col7, col8, col9, col10 = st.columns(5)
 
     col6.metric(
-        "Locales ocupados con recibo",
-        f"{locales_ocupados_con_recibo_sin_sg_total:,}"
-    )
-
-    col7.metric(
-        "Cobertura de muestra",
-        "—" if pd.isna(cobertura_muestra_pct) else f"{cobertura_muestra_pct:.0f}%"
-    )
-
-    col8.metric(
-        "Cobertura de muestra por m²",
-        "—" if pd.isna(cobertura_m2_pct) else f"{cobertura_m2_pct:.0f}%"
-    )
-
-    col9.metric(
         "Demanda contratada (kW)",
         format_number(kw_contratados_total, 0)
     )
 
-    col10.metric(
+    col7.metric(
         "Demanda máxima anual (kW)",
-        format_number(demanda_promedio_anual_total_kw, 0)
+        format_number(demanda_maxima_anual_total_kw, 0)
     )
 
-    st.caption(
-        "Diagnóstico temporal: para la suma de Demanda contratada se están usando "
-        + (f"{diag_locales_demanda_contratada:,}" if pd.notna(diag_locales_demanda_contratada) else "—")
-        + " locales ocupados con recibo; para la suma de Demanda máxima anual se están usando "
-        + (f"{diag_locales_demanda_maxima:,}" if pd.notna(diag_locales_demanda_maxima) else "—")
-        + " locales ocupados con recibo. No considera Servicios Generales."
+    col8.metric(
+        "Facturación anual",
+        format_money_compact(total_importe_ocupados_con_recibo)
     )
 
-    # ------------------------------------------------------------
-    # Fila 3: Servicios Generales
-    # ------------------------------------------------------------
-
-    st.markdown(
-        '<div class="subsection-title">Servicios Generales (SG)</div>',
-        unsafe_allow_html=True
-    )
-
-    col11, col12, col13, col14, col15, col16 = st.columns(6)
-
-    col11.metric(
-        "Total de servicios de Servicios Generales",
-        "—" if pd.isna(sg_total_servicios_resumen) else f"{sg_total_servicios_resumen:,.0f}"
-    )
-
-    col12.metric(
-        "Demanda contratada SG (kW)",
-        format_number(sg_total_demanda_contratada_resumen, 0)
-    )
-
-    col13.metric(
-        "Demanda máxima anual SG (kW)",
-        format_number(sg_total_demanda_maxima_resumen, 0)
-    )
-
-    col14.metric(
-        "Facturación anual SG",
-        format_money_compact(sg_total_facturacion_resumen)
-    )
-
-    col15.metric(
-        "Consumo anual SG (kWh)",
-        format_number(sg_total_kwh_resumen, 0)
-    )
-
-    col16.metric(
-        "Costo promedio SG (MXN/kWh)",
-        format_mxn_per_kwh(sg_costo_promedio_resumen)
-    )
-
-    st.caption(
-        "Diagnóstico temporal SG: para calcular Facturación total SG y Costo promedio SG se están usando "
-        + (f"{diag_sg_locales_facturacion:,}" if pd.notna(diag_sg_locales_facturacion) else "—")
-        + " recibos del parser, correspondientes a "
-        + (f"{diag_sg_servicios_facturacion:,}" if pd.notna(diag_sg_servicios_facturacion) else "—")
-        + " números de servicio de Servicios Generales."
+    col9.metric(
+        "Costo promedio (MXN/kWh)",
+        format_mxn_per_kwh(costo_promedio_mxn_kwh)
     )
 
     # ============================================================
@@ -12154,7 +9631,7 @@ with tab_resumen:
     )
 
     st.caption(
-        "Esta sección calcula la densidad de demanda agregada por giro comercial y tarifa. "
+        "Esta sección calcula la densidad de demanda máxima anual por giro comercial y tarifa. "
         "El universo base es la muestra global validada de locales ocupados con recibo."
     )
 
@@ -12375,7 +9852,7 @@ with tab_resumen:
         densidad_col_benchmark = first_existing_column(
             benchmark_base_global,
             [
-                "densidad_demanda_maxima_anual_w_m2",
+                "densidad_demanda_promedio_anual_w_m2",
                 "Densidad de demanda W/m2"
             ]
         )
@@ -12430,10 +9907,6 @@ with tab_resumen:
                 .str.upper()
                 .str.strip()
             )
-
-        benchmark_base_global["tension_benchmark"] = clasificar_tension_tarifa_series(
-            benchmark_base_global["tarifa_benchmark"]
-        )
 
         if giro_col_benchmark is None:
             benchmark_base_global["giro_benchmark"] = "Sin giro"
@@ -12683,7 +10156,498 @@ with tab_resumen:
             "con el total de locales ocupados con recibo."
         )
 
-        # Diagnósticos internos ocultos en Resumen Ejecutivo por simplicidad visual.
+        with st.expander(
+            "Diagnóstico: locales sin densidad por área",
+            expanded=False
+        ):
+
+            if diagnostico_sin_densidad_area.empty:
+                st.success(
+                    "No hay locales sin densidad por área."
+                )
+
+            else:
+                cols_diag_area = [
+                    col for col in [
+                        "_centro_comercial_limpio",
+                        "NOMBRE DEL CC",
+                        "Centro Comercial",
+                        "CLIENTE",
+                        "NOMBRE COMERCIAL",
+                        "Giro comercial densidad",
+                        "SUBGIRO_COMERCIAL",
+                        "GIRO_COMERCIAL",
+                        "Tarifa",
+                        "tarifa_benchmark",
+                        "no_servicio",
+                        "parser_no_servicio_match",
+                        "medidor",
+                        "parser_medidor_match",
+                        "Demanda máxima anual (kW)",
+                        "demanda_benchmark_kw",
+                        "Area m2",
+                        "area_benchmark_m2",
+                        "Densidad de demanda W/m2",
+                        "densidad_benchmark_w_m2",
+                        "criterio_union_demanda",
+                        "estatus_demanda",
+                        "Motivo"
+                    ]
+                    if col in diagnostico_sin_densidad_area.columns
+                ]
+
+                st.warning(
+                    f"{len(diagnostico_sin_densidad_area):,} locales tienen demanda calculada, "
+                    "pero no tienen densidad calculable."
+                )
+
+                st.dataframe(
+                    diagnostico_sin_densidad_area[cols_diag_area],
+                    use_container_width=True,
+                    hide_index=True,
+                    height=500
+                )
+
+        # ------------------------------------------------------------
+        # Diagnóstico Servicios Generales
+        # ------------------------------------------------------------
+
+        with st.expander(
+            "Diagnóstico Servicios Generales: DG vs match global vs benchmark",
+            expanded=False
+        ):
+
+            def texto_ocupado_valido_debug(series):
+                texto = (
+                    series
+                    .fillna("")
+                    .astype(str)
+                    .str.upper()
+                    .str.strip()
+                )
+
+                return (
+                    texto.ne("")
+                    & ~texto.isin([
+                        "NAN",
+                        "NONE",
+                        "<NA>",
+                        "DISPONIBLE",
+                        "LOCAL DISPONIBLE",
+                        "VACANTE"
+                    ])
+                    & ~texto.str.contains("DISPONIBLE", na=False)
+                    & ~texto.str.contains("VACANTE", na=False)
+                )
+
+            def normalizar_debug(value):
+                if pd.isna(value):
+                    return ""
+
+                return (
+                    str(value)
+                    .upper()
+                    .strip()
+                    .replace("Á", "A")
+                    .replace("É", "E")
+                    .replace("Í", "I")
+                    .replace("Ó", "O")
+                    .replace("Ú", "U")
+                    .replace("Ñ", "N")
+                )
+
+            def crear_key_local_debug(df_debug):
+                df_debug = df_debug.copy()
+
+                cc_col_debug = first_existing_column(
+                    df_debug,
+                    [
+                        "_centro_comercial_limpio",
+                        "NOMBRE DEL CC",
+                        "CENTRO COMERCIAL",
+                        "Centro Comercial",
+                        "CC",
+                        "PLAZA",
+                        "source_sheet"
+                    ]
+                )
+
+                cliente_col_debug = first_existing_column(
+                    df_debug,
+                    [
+                        "CLIENTE",
+                        "Cliente",
+                        "cliente",
+                        "cliente_nombre"
+                    ]
+                )
+
+                nombre_col_debug = first_existing_column(
+                    df_debug,
+                    [
+                        "NOMBRE COMERCIAL",
+                        "Nombre Comercial",
+                        "Nombre comercial",
+                        "recibos_subgroup",
+                        "tenant",
+                        "locatario"
+                    ]
+                )
+
+                local_col_debug = first_existing_column(
+                    df_debug,
+                    [
+                        "No de Local",
+                        "No. de Local",
+                        "No Local",
+                        "LOCAL",
+                        "Local"
+                    ]
+                )
+
+                medidor_col_debug = first_existing_column(
+                    df_debug,
+                    [
+                        "No. De medidor",
+                        "No. de medidor",
+                        "No de medidor",
+                        "MEDIDOR",
+                        "Medidor",
+                        "medidor",
+                        "parser_medidor_match"
+                    ]
+                )
+
+                if cc_col_debug:
+                    cc_key_debug = df_debug[cc_col_debug].apply(cc_key)
+                else:
+                    cc_key_debug = pd.Series(
+                        "",
+                        index=df_debug.index
+                    )
+
+                if cliente_col_debug:
+                    cliente_key_debug = df_debug[cliente_col_debug].apply(
+                        normalizar_debug
+                    )
+                else:
+                    cliente_key_debug = pd.Series(
+                        "",
+                        index=df_debug.index
+                    )
+
+                if nombre_col_debug:
+                    nombre_key_debug = df_debug[nombre_col_debug].apply(
+                        normalizar_debug
+                    )
+                else:
+                    nombre_key_debug = pd.Series(
+                        "",
+                        index=df_debug.index
+                    )
+
+                if local_col_debug:
+                    local_key_debug = df_debug[local_col_debug].apply(
+                        normalizar_debug
+                    )
+                else:
+                    local_key_debug = pd.Series(
+                        "",
+                        index=df_debug.index
+                    )
+
+                if medidor_col_debug:
+                    medidor_key_debug = df_debug[medidor_col_debug].apply(
+                        normalizar_debug
+                    )
+                else:
+                    medidor_key_debug = pd.Series(
+                        "",
+                        index=df_debug.index
+                    )
+
+                return (
+                    cc_key_debug.astype(str)
+                    + " | "
+                    + cliente_key_debug.astype(str)
+                    + " | "
+                    + nombre_key_debug.astype(str)
+                    + " | "
+                    + local_key_debug.astype(str)
+                    + " | "
+                    + medidor_key_debug.astype(str)
+                )
+
+            # --------------------------------------------------------
+            # 1. Servicios Generales ocupados en DG
+            # --------------------------------------------------------
+
+            sg_dg_debug = general_data.copy()
+
+            giro_col_sg_debug = first_existing_column(
+                sg_dg_debug,
+                [
+                    "SUBGIRO_COMERCIAL",
+                    "SUBGIRO COMERCIAL",
+                    "GIRO_COMERCIAL",
+                    "GIRO COMERCIAL",
+                    "GIRO",
+                    "Giro",
+                    "Giro comercial"
+                ]
+            )
+
+            cliente_col_sg_debug = first_existing_column(
+                sg_dg_debug,
+                [
+                    "CLIENTE",
+                    "Cliente",
+                    "cliente",
+                    "cliente_nombre"
+                ]
+            )
+
+            nombre_col_sg_debug = first_existing_column(
+                sg_dg_debug,
+                [
+                    "NOMBRE COMERCIAL",
+                    "Nombre Comercial",
+                    "Nombre comercial",
+                    "recibos_subgroup",
+                    "tenant",
+                    "locatario"
+                ]
+            )
+
+            if giro_col_sg_debug is None:
+                st.warning(
+                    "No encontré columna de giro en DG para diagnosticar Servicios Generales."
+                )
+
+            else:
+                giro_text_sg_debug = (
+                    sg_dg_debug[giro_col_sg_debug]
+                    .fillna("")
+                    .astype(str)
+                    .str.upper()
+                    .str.strip()
+                )
+
+                mask_sg_dg_debug = giro_text_sg_debug.str.contains(
+                    r"SERVICIO[S]?\s+GENERAL(ES)?",
+                    regex=True,
+                    na=False
+                )
+
+                if cliente_col_sg_debug:
+                    cliente_ocupado_debug = texto_ocupado_valido_debug(
+                        sg_dg_debug[cliente_col_sg_debug]
+                    )
+                else:
+                    cliente_ocupado_debug = pd.Series(
+                        False,
+                        index=sg_dg_debug.index
+                    )
+
+                if nombre_col_sg_debug:
+                    nombre_ocupado_debug = texto_ocupado_valido_debug(
+                        sg_dg_debug[nombre_col_sg_debug]
+                    )
+                else:
+                    nombre_ocupado_debug = pd.Series(
+                        False,
+                        index=sg_dg_debug.index
+                    )
+
+                mask_ocupado_dg_debug = (
+                    cliente_ocupado_debug
+                    | nombre_ocupado_debug
+                )
+
+                sg_dg_ocupados_debug = sg_dg_debug[
+                    mask_sg_dg_debug
+                    & mask_ocupado_dg_debug
+                ].copy()
+
+                sg_dg_ocupados_debug["_key_local_debug"] = crear_key_local_debug(
+                    sg_dg_ocupados_debug
+                )
+
+                # ----------------------------------------------------
+                # 2. Servicios Generales con match global
+                # ----------------------------------------------------
+
+                if (
+                    "muestra_con_recibo_global" in globals()
+                    and not muestra_con_recibo_global.empty
+                ):
+                    muestra_sg_debug = muestra_con_recibo_global.copy()
+
+                    giro_col_muestra_sg_debug = first_existing_column(
+                        muestra_sg_debug,
+                        [
+                            "SUBGIRO_COMERCIAL",
+                            "SUBGIRO COMERCIAL",
+                            "GIRO_COMERCIAL",
+                            "GIRO COMERCIAL",
+                            "GIRO",
+                            "Giro",
+                            "Giro comercial",
+                            "Giro comercial densidad"
+                        ]
+                    )
+
+                    if giro_col_muestra_sg_debug:
+                        mask_sg_muestra_debug = (
+                            muestra_sg_debug[giro_col_muestra_sg_debug]
+                            .fillna("")
+                            .astype(str)
+                            .str.upper()
+                            .str.strip()
+                            .str.contains(
+                                r"SERVICIO[S]?\s+GENERAL(ES)?",
+                                regex=True,
+                                na=False
+                            )
+                        )
+                    else:
+                        mask_sg_muestra_debug = pd.Series(
+                            False,
+                            index=muestra_sg_debug.index
+                        )
+
+                    muestra_sg_debug = muestra_sg_debug[
+                        mask_sg_muestra_debug
+                    ].copy()
+
+                    muestra_sg_debug["_key_local_debug"] = crear_key_local_debug(
+                        muestra_sg_debug
+                    )
+
+                    keys_sg_muestra_debug = set(
+                        muestra_sg_debug["_key_local_debug"]
+                        .dropna()
+                        .astype(str)
+                    )
+
+                else:
+                    muestra_sg_debug = pd.DataFrame()
+                    keys_sg_muestra_debug = set()
+
+                # ----------------------------------------------------
+                # 3. Servicios Generales contados en benchmark
+                # ----------------------------------------------------
+
+                benchmark_sg_debug = benchmark_base_global.copy()
+
+                if "giro_benchmark" in benchmark_sg_debug.columns:
+                    mask_sg_benchmark_debug = (
+                        benchmark_sg_debug["giro_benchmark"]
+                        .fillna("")
+                        .astype(str)
+                        .str.upper()
+                        .str.strip()
+                        .str.contains(
+                            r"SERVICIO[S]?\s+GENERAL(ES)?",
+                            regex=True,
+                            na=False
+                        )
+                    )
+                else:
+                    mask_sg_benchmark_debug = pd.Series(
+                        False,
+                        index=benchmark_sg_debug.index
+                    )
+
+                benchmark_sg_debug = benchmark_sg_debug[
+                    mask_sg_benchmark_debug
+                ].copy()
+
+                benchmark_sg_debug["_key_local_debug"] = crear_key_local_debug(
+                    benchmark_sg_debug
+                )
+
+                keys_sg_benchmark_debug = set(
+                    benchmark_sg_debug["_key_local_debug"]
+                    .dropna()
+                    .astype(str)
+                )
+
+                # ----------------------------------------------------
+                # 4. Marcar estatus en DG
+                # ----------------------------------------------------
+
+                sg_dg_ocupados_debug["Tiene match global"] = (
+                    sg_dg_ocupados_debug["_key_local_debug"]
+                    .astype(str)
+                    .isin(keys_sg_muestra_debug)
+                )
+
+                sg_dg_ocupados_debug["Contado en benchmark como SG"] = (
+                    sg_dg_ocupados_debug["_key_local_debug"]
+                    .astype(str)
+                    .isin(keys_sg_benchmark_debug)
+                )
+
+                sg_dg_ocupados_debug["Estatus"] = "OK"
+
+                sg_dg_ocupados_debug.loc[
+                    ~sg_dg_ocupados_debug["Tiene match global"],
+                    "Estatus"
+                ] = "Sin match global"
+
+                sg_dg_ocupados_debug.loc[
+                    sg_dg_ocupados_debug["Tiene match global"]
+                    & ~sg_dg_ocupados_debug["Contado en benchmark como SG"],
+                    "Estatus"
+                ] = "Con match, pero no contado como SG en benchmark"
+
+                col_diag_1, col_diag_2, col_diag_3 = st.columns(3)
+
+                col_diag_1.metric(
+                    "SG ocupados en DG",
+                    f"{len(sg_dg_ocupados_debug):,}"
+                )
+
+                col_diag_2.metric(
+                    "SG con match global",
+                    f"{len(muestra_sg_debug):,}"
+                )
+
+                col_diag_3.metric(
+                    "SG contados en benchmark",
+                    f"{len(benchmark_sg_debug):,}"
+                )
+
+                # ----------------------------------------------------
+                # 5. Tabla de diagnóstico
+                # ----------------------------------------------------
+
+                cols_diag_sg = [
+                    col for col in [
+                        "source_sheet",
+                        "_centro_comercial_limpio",
+                        "NOMBRE DEL CC",
+                        "CLIENTE",
+                        "NOMBRE COMERCIAL",
+                        "No de Local",
+                        "No. de Local",
+                        "No. De medidor",
+                        "No. de medidor",
+                        giro_col_sg_debug,
+                        "Tiene match global",
+                        "Contado en benchmark como SG",
+                        "Estatus"
+                    ]
+                    if col in sg_dg_ocupados_debug.columns
+                ]
+
+                st.dataframe(
+                    sg_dg_ocupados_debug[cols_diag_sg],
+                    use_container_width=True,
+                    hide_index=True,
+                    height=400
+                )
 
         # ------------------------------------------------------------
         # Selectores
@@ -12726,16 +10690,30 @@ with tab_resumen:
             else []
         )
 
+        tarifas_benchmark_opciones = (
+            benchmark_base_global["tarifa_benchmark"]
+            .dropna()
+            .astype(str)
+            .str.strip()
+            .replace("", pd.NA)
+            .dropna()
+            .sort_values()
+            .unique()
+            .tolist()
+            if "tarifa_benchmark" in benchmark_base_global.columns
+            else []
+        )
+
         giro_selector = st.selectbox(
             "Selecciona giro comercial",
             ["Todos"] + giros_benchmark_opciones,
             key="benchmark_giro"
         )
 
-        tension_selector = st.selectbox(
-            "Selecciona Tensión",
-            ["Todos", "Baja Tensión (BT)", "Media Tensión (MT)"],
-            key="benchmark_tension"
+        tarifa_selector = st.selectbox(
+            "Selecciona tarifa",
+            ["Todos"] + tarifas_benchmark_opciones,
+            key="benchmark_tarifa"
         )
 
         # ------------------------------------------------------------
@@ -12761,9 +10739,9 @@ with tab_resumen:
                 benchmark_filtrado["giro_benchmark"].eq(giro_selector)
             ].copy()
 
-        if tension_selector != "Todos":
+        if tarifa_selector != "Todos":
             benchmark_filtrado = benchmark_filtrado[
-                benchmark_filtrado["tension_benchmark"].eq(tension_selector)
+                benchmark_filtrado["tarifa_benchmark"].eq(tarifa_selector)
             ].copy()
 
         benchmark_calculable = benchmark_filtrado[
@@ -12780,7 +10758,7 @@ with tab_resumen:
         ].copy()
 
         # ------------------------------------------------------------
-        # Resumen de densidad por giro y tensión
+        # Resumen de densidad por giro y tarifa
         # ------------------------------------------------------------
 
         if benchmark_calculable.empty:
@@ -12790,7 +10768,7 @@ with tab_resumen:
 
         else:
             st.markdown(
-                '<div class="subsection-title">Resumen de densidad por giro y tensión</div>',
+                '<div class="subsection-title">Resumen de densidad por giro y tarifa</div>',
                 unsafe_allow_html=True
             )
 
@@ -12799,59 +10777,67 @@ with tab_resumen:
                 .groupby(
                     [
                         "giro_benchmark",
-                        "tension_benchmark"
+                        "tarifa_benchmark"
                     ],
                     dropna=False
                 )
-                .apply(
-                    lambda g: pd.Series({
-                        "No. de locales": int(len(g)),
-                        "Área total (m²)": calcular_area_agregada_m2(
-                            g,
-                            "area_benchmark_m2"
-                        ),
-                        "Demanda máxima anual total (kW)": calcular_demanda_agregada_kw(
-                            g,
-                            "demanda_benchmark_kw"
-                        ),
-                        "Densidad agregada (W/m²)": calcular_densidad_agregada_w_m2(
-                            g,
-                            "demanda_benchmark_kw",
-                            "area_benchmark_m2"
-                        ),
-                        "Densidad mediana local (W/m²)": pd.to_numeric(
-                            g["densidad_benchmark_w_m2"],
-                            errors="coerce"
-                        ).median(),
-                        "P25 local (W/m²)": pd.to_numeric(
-                            g["densidad_benchmark_w_m2"],
-                            errors="coerce"
-                        ).quantile(0.25),
-                        "P75 local (W/m²)": pd.to_numeric(
-                            g["densidad_benchmark_w_m2"],
-                            errors="coerce"
-                        ).quantile(0.75),
-                        "P90 local (W/m²)": pd.to_numeric(
-                            g["densidad_benchmark_w_m2"],
-                            errors="coerce"
-                        ).quantile(0.90)
-                    })
+                .agg(
+                    locales=(
+                        "densidad_benchmark_w_m2",
+                        "count"
+                    ),
+                    area_promedio_m2=(
+                        "area_benchmark_m2",
+                        "mean"
+                    ),
+                    demanda_promedio_anual_promedio_kw=(
+                        "demanda_benchmark_kw",
+                        "mean"
+                    ),
+                    densidad_promedio_w_m2=(
+                        "densidad_benchmark_w_m2",
+                        "mean"
+                    ),
+                    densidad_mediana_w_m2=(
+                        "densidad_benchmark_w_m2",
+                        "median"
+                    ),
+                    p25_w_m2=(
+                        "densidad_benchmark_w_m2",
+                        lambda x: x.quantile(0.25)
+                    ),
+                    p75_w_m2=(
+                        "densidad_benchmark_w_m2",
+                        lambda x: x.quantile(0.75)
+                    ),
+                    p90_w_m2=(
+                        "densidad_benchmark_w_m2",
+                        lambda x: x.quantile(0.90)
+                    )
                 )
                 .reset_index()
                 .rename(columns={
                     "giro_benchmark": "Giro comercial",
-                    "tension_benchmark": "Tensión"
+                    "tarifa_benchmark": "Tarifa",
+                    "locales": "No. de locales",
+                    "area_promedio_m2": "Área promedio (m²)",
+                    "demanda_promedio_anual_promedio_kw": "Demanda máxima anual (kW)",
+                    "densidad_promedio_w_m2": "Densidad promedio (W/m²)",
+                    "densidad_mediana_w_m2": "Densidad mediana (W/m²)",
+                    "p25_w_m2": "P25 (W/m²)",
+                    "p75_w_m2": "P75 (W/m²)",
+                    "p90_w_m2": "P90 (W/m²)"
                 })
             )
 
             for col in [
-                "Área total (m²)",
-                "Demanda máxima anual total (kW)",
-                "Densidad agregada (W/m²)",
-                "Densidad mediana local (W/m²)",
-                "P25 local (W/m²)",
-                "P75 local (W/m²)",
-                "P90 local (W/m²)"
+                "Área promedio (m²)",
+                "Demanda máxima anual (kW)",
+                "Densidad promedio (W/m²)",
+                "Densidad mediana (W/m²)",
+                "P25 (W/m²)",
+                "P75 (W/m²)",
+                "P90 (W/m²)"
             ]:
                 resumen_benchmark[col] = pd.to_numeric(
                     resumen_benchmark[col],
@@ -12860,8 +10846,8 @@ with tab_resumen:
 
             resumen_benchmark = resumen_benchmark.sort_values(
                 [
-                    "Tensión",
-                    "Densidad agregada (W/m²)"
+                    "Tarifa",
+                    "Densidad promedio (W/m²)"
                 ],
                 ascending=[
                     True,
@@ -12872,15 +10858,15 @@ with tab_resumen:
             resumen_benchmark = resumen_benchmark[
                 [
                     "Giro comercial",
-                    "Tensión",
+                    "Tarifa",
                     "No. de locales",
-                    "Área total (m²)",
-                    "Demanda máxima anual total (kW)",
-                    "Densidad agregada (W/m²)",
-                    "Densidad mediana local (W/m²)",
-                    "P25 local (W/m²)",
-                    "P75 local (W/m²)",
-                    "P90 local (W/m²)"
+                    "Área promedio (m²)",
+                    "Demanda máxima anual (kW)",
+                    "Densidad promedio (W/m²)",
+                    "Densidad mediana (W/m²)",
+                    "P25 (W/m²)",
+                    "P75 (W/m²)",
+                    "P90 (W/m²)"
                 ]
             ].copy()
 
@@ -12889,184 +10875,6 @@ with tab_resumen:
                 use_container_width=True,
                 hide_index=True
             )
-
-            # ------------------------------------------------------------
-            # Resumen de locales por marca
-            # ------------------------------------------------------------
-
-            st.markdown(
-                '<div class="subsection-title">Resumen de locales por marca</div>',
-                unsafe_allow_html=True
-            )
-
-            st.caption(
-                "Se muestran solo las marcas que tienen 3 o más locales en la muestra filtrada."
-            )
-
-            marcas_base = benchmark_filtrado.copy()
-
-            marcas_base = marcas_base[
-                ~marcas_base["giro_benchmark"]
-                .fillna("")
-                .astype(str)
-                .str.upper()
-                .str.strip()
-                .str.contains("SERVICIOS GENERALES", na=False)
-            ].copy()
-
-            nombre_col_marca = first_existing_column(
-                marcas_base,
-                [
-                    "NOMBRE COMERCIAL",
-                    "Nombre Comercial",
-                    "Nombre comercial",
-                    "parser_recibos_subgroup_match",
-                    "recibos_subgroup",
-                    "CLIENTE",
-                    "cliente_nombre"
-                ]
-            )
-
-            centro_col_marca = first_existing_column(
-                marcas_base,
-                [
-                    "_centro_comercial_limpio",
-                    "NOMBRE DEL CC",
-                    "Centro Comercial",
-                    "CENTRO COMERCIAL",
-                    "source_sheet"
-                ]
-            )
-
-            servicio_col_marca = first_existing_column(
-                marcas_base,
-                [
-                    "parser_no_servicio_match",
-                    "no_servicio",
-                    "No. servicio",
-                    "No servicio"
-                ]
-            )
-
-            if nombre_col_marca is None or marcas_base.empty:
-                st.info(
-                    "No hay información suficiente para construir el resumen por marca con los filtros seleccionados."
-                )
-
-            else:
-                marcas_base["_marca_key"] = (
-                    marcas_base[nombre_col_marca]
-                    .fillna("")
-                    .astype(str)
-                    .apply(normalize_brand_name)
-                )
-
-                marcas_base = marcas_base[
-                    marcas_base["_marca_key"].astype(str).str.strip().ne("")
-                ].copy()
-
-                marcas_base["_marca_display"] = (
-                    marcas_base[nombre_col_marca]
-                    .fillna("")
-                    .astype(str)
-                    .str.strip()
-                )
-
-                if servicio_col_marca:
-                    marcas_base["_local_key_marca"] = (
-                        marcas_base[servicio_col_marca]
-                        .fillna("")
-                        .astype(str)
-                        .str.strip()
-                    )
-                else:
-                    marcas_base["_local_key_marca"] = marcas_base.index.astype(str)
-
-                mask_local_key_marca_vacia = marcas_base["_local_key_marca"].eq("")
-
-                marcas_base.loc[
-                    mask_local_key_marca_vacia,
-                    "_local_key_marca"
-                ] = marcas_base.loc[
-                    mask_local_key_marca_vacia
-                ].index.astype(str)
-
-                marcas_base["_cc_marca"] = (
-                    marcas_base[centro_col_marca]
-                    if centro_col_marca
-                    else ""
-                )
-
-                resumen_marca = (
-                    marcas_base
-                    .groupby("_marca_key", dropna=False)
-                    .apply(
-                        lambda g: pd.Series({
-                            "Marca": (
-                                g["_marca_display"].mode().iloc[0]
-                                if not g["_marca_display"].mode().empty
-                                else g["_marca_display"].iloc[0]
-                            ),
-                            "No. de locales": int(g["_local_key_marca"].nunique()),
-                            "No. de centros comerciales": int(
-                                pd.Series(g["_cc_marca"]).dropna().astype(str).str.strip().replace("", pd.NA).dropna().nunique()
-                            ),
-                            "Área total (m²)": calcular_area_agregada_m2(
-                                g,
-                                "area_benchmark_m2"
-                            ),
-                            "Demanda máxima anual total (kW)": calcular_demanda_agregada_kw(
-                                g,
-                                "demanda_benchmark_kw"
-                            ),
-                            "Densidad agregada (W/m²)": calcular_densidad_agregada_w_m2(
-                                g,
-                                "demanda_benchmark_kw",
-                                "area_benchmark_m2"
-                            )
-                        })
-                    )
-                    .reset_index(drop=True)
-                )
-
-                resumen_marca = resumen_marca[
-                    resumen_marca["No. de locales"] >= 3
-                ].copy()
-
-                if resumen_marca.empty:
-                    st.info(
-                        "No hay marcas con 3 o más locales para la selección actual."
-                    )
-
-                else:
-                    for col in [
-                        "Área total (m²)",
-                        "Demanda máxima anual total (kW)",
-                        "Densidad agregada (W/m²)"
-                    ]:
-                        resumen_marca[col] = pd.to_numeric(
-                            resumen_marca[col],
-                            errors="coerce"
-                        ).round(1)
-
-                    resumen_marca = resumen_marca.sort_values(
-                        [
-                            "No. de locales",
-                            "Densidad agregada (W/m²)",
-                            "Marca"
-                        ],
-                        ascending=[
-                            False,
-                            False,
-                            True
-                        ]
-                    ).reset_index(drop=True)
-
-                    st.dataframe(
-                        resumen_marca,
-                        use_container_width=True,
-                        hide_index=True
-                    )
 
             # ------------------------------------------------------------
             # Detalle de locales según filtros seleccionados
@@ -13100,22 +10908,15 @@ with tab_resumen:
             #     & (detalle_locales_filtrado["densidad_benchmark_w_m2"] > 0)
             # ].copy()
 
-            centro_candidates_detalle = [
-                "_centro_comercial_limpio",
-                "NOMBRE DEL CC",
-                "Centro Comercial",
-                "CENTRO COMERCIAL",
-                "source_sheet",
-                "mall_folder",
-                "parser_mall_folder_match",
-                "file_path",
-                "source_file_path",
-                "direccion_completa",
-                "direccion_raw"
-            ]
-            centro_key_detalle = coalesce_cc_from_columns(
+            centro_col_detalle = first_existing_column(
                 detalle_locales_filtrado,
-                centro_candidates_detalle
+                [
+                    "_centro_comercial_limpio",
+                    "NOMBRE DEL CC",
+                    "Centro Comercial",
+                    "CENTRO COMERCIAL",
+                    "source_sheet"
+                ]
             )
 
             nombre_col_detalle = first_existing_column(
@@ -13141,7 +10942,11 @@ with tab_resumen:
 
             detalle_tabla = pd.DataFrame()
 
-            detalle_tabla["Centro comercial"] = centro_key_detalle.apply(cc_display_from_key)
+            detalle_tabla["Centro comercial"] = (
+                detalle_locales_filtrado[centro_col_detalle]
+                if centro_col_detalle
+                else pd.NA
+            )
 
             detalle_tabla["Nombre Comercial"] = (
                 detalle_locales_filtrado[nombre_col_detalle]
@@ -13154,68 +10959,6 @@ with tab_resumen:
                 if servicio_col_detalle
                 else pd.NA
             )
-
-            # ------------------------------------------------------------
-            # Diagnóstico temporal de rescate/parser por No. de servicio
-            # ------------------------------------------------------------
-            # Esto permite ver si para un local sin demanda sí existen kWh/kwmax
-            # en alguno de los archivos que enriquecen al parser.
-
-            if "tarifa_benchmark" in detalle_locales_filtrado.columns:
-                detalle_tabla["Tarifa"] = detalle_locales_filtrado["tarifa_benchmark"]
-            elif "Tarifa" in detalle_locales_filtrado.columns:
-                detalle_tabla["Tarifa"] = detalle_locales_filtrado["Tarifa"]
-            elif "TARIFA_FINAL" in detalle_locales_filtrado.columns:
-                detalle_tabla["Tarifa"] = detalle_locales_filtrado["TARIFA_FINAL"]
-
-            if "criterio_union_demanda" in detalle_locales_filtrado.columns:
-                detalle_tabla["Criterio unión demanda"] = detalle_locales_filtrado["criterio_union_demanda"]
-
-            if "estatus_demanda" in detalle_locales_filtrado.columns:
-                detalle_tabla["Estatus demanda"] = detalle_locales_filtrado["estatus_demanda"]
-
-            for _col_src, _col_dst in [
-                ("file_path", "file_path base"),
-                ("source_file_path", "source_file_path base"),
-                ("kwh_total_fuente", "Fuente kWh base"),
-                ("kwmax_fuente", "Fuente kwmax base"),
-                ("demanda_contratada_fuente", "Fuente demanda contratada base"),
-                ("parser_enriquecido_status", "Status enriquecimiento base"),
-                ("fila_agregada_desde", "Fila agregada desde"),
-            ]:
-                if _col_src in detalle_locales_filtrado.columns:
-                    detalle_tabla[_col_dst] = detalle_locales_filtrado[_col_src]
-
-            try:
-                diag_lookup = construir_lookup_diagnostico_rescates(
-                    file_signature(PDBT_KWH_RESCUE_CSV),
-                    file_signature(GDM_RESCUE_CSV),
-                    file_signature(NEW_PARSER_ROWS_CSV),
-                    file_signature(PARKS_HOSPITALITY_RESCUE_CSV),
-                )
-            except Exception:
-                diag_lookup = pd.DataFrame()
-
-            if not diag_lookup.empty:
-                detalle_tabla["_key_no_servicio_diag"] = normalize_service_cc(
-                    detalle_tabla["No. de servicio"]
-                )
-                detalle_tabla = detalle_tabla.merge(
-                    diag_lookup,
-                    on="_key_no_servicio_diag",
-                    how="left"
-                )
-                detalle_tabla = detalle_tabla.drop(columns=["_key_no_servicio_diag"], errors="ignore")
-
-                # Si el file_path diagnóstico contiene un CC reconocible, lo usamos también
-                # cuando contradice el CC visual. Esto revela/corrige matches cruzados
-                # como GARRAPATA asignado a Ambar aunque el recibo sea de Salina Cruz.
-                if "file_path diagnóstico" in detalle_tabla.columns:
-                    _cc_desde_path_diag = detalle_tabla["file_path diagnóstico"].apply(extraer_cc_desde_path)
-                    detalle_tabla.loc[
-                        _cc_desde_path_diag.fillna("").astype(str).str.strip().ne(""),
-                        "Centro comercial"
-                    ] = _cc_desde_path_diag
 
             detalle_tabla["Área (m²)"] = pd.to_numeric(
                 detalle_locales_filtrado["area_benchmark_m2"],
@@ -13244,271 +10987,10 @@ with tab_resumen:
                     detalle_locales_filtrado["nivel_factor_ajuste_allux_pdbt"]
                 )
 
-            detalle_tabla["Densidad local (W/m²)"] = pd.to_numeric(
+            detalle_tabla["Densidad promedio (W/m²)"] = pd.to_numeric(
                 detalle_locales_filtrado["densidad_benchmark_w_m2"],
                 errors="coerce"
             )
-
-            # ------------------------------------------------------------
-            # Refuerzo diagnóstico antes de mostrar el detalle
-            # ------------------------------------------------------------
-            # 1) Si existe kwmax diagnóstico y la demanda final viene vacía,
-            #    usamos ese kwmax directamente como Demanda máxima anual.
-            # 2) Si el área viene vacía, intentamos rescatarla desde DG usando
-            #    Centro comercial + Nombre comercial.
-            # 3) Si hay duplicados por servicio con/sin cero inicial, conservamos
-            #    la fila con mejor información de demanda/área.
-
-            if "kwmax diagnóstico" in detalle_tabla.columns:
-                _kwmax_diag = pd.to_numeric(
-                    detalle_tabla["kwmax diagnóstico"],
-                    errors="coerce"
-                )
-                _mask_kwmax_diag = (
-                    detalle_tabla["Demanda máxima anual (kW)"].isna()
-                    & _kwmax_diag.notna()
-                    & (_kwmax_diag > 0)
-                )
-                detalle_tabla.loc[
-                    _mask_kwmax_diag,
-                    "Demanda máxima anual (kW)"
-                ] = _kwmax_diag.loc[_mask_kwmax_diag]
-
-                if "Estatus demanda" in detalle_tabla.columns:
-                    detalle_tabla.loc[
-                        _mask_kwmax_diag,
-                        "Estatus demanda"
-                    ] = "Calculada con kwmax diagnóstico"
-
-                if "Criterio unión demanda" in detalle_tabla.columns:
-                    detalle_tabla.loc[
-                        _mask_kwmax_diag,
-                        "Criterio unión demanda"
-                    ] = "kwmax diagnóstico"
-
-            # Área desde DG por Centro Comercial + Nombre Comercial.
-            try:
-                if (
-                    "general_data" in globals()
-                    and general_data is not None
-                    and not general_data.empty
-                ):
-                    _dg_area = general_data.copy()
-
-                    _area_col_dg = first_existing_column(
-                        _dg_area,
-                        [
-                            "MTS2",
-                            "M2",
-                            "m2",
-                            "MTS 2",
-                            "MTS²",
-                            "AREA_M2",
-                            "AREA M2",
-                            "SUPERFICIE",
-                            "SUPERFICIE M2",
-                            "Área",
-                            "Area",
-                            "AREA",
-                            "Superficie"
-                        ]
-                    )
-
-                    _nombre_col_dg = first_existing_column(
-                        _dg_area,
-                        [
-                            "NOMBRE COMERCIAL",
-                            "Nombre Comercial",
-                            "CLIENTE",
-                            "cliente_nombre"
-                        ]
-                    )
-
-                    _cc_cols_dg = [
-                        "NOMBRE DEL CC",
-                        "Centro Comercial",
-                        "CENTRO COMERCIAL",
-                        "source_sheet"
-                    ]
-
-                    if _area_col_dg is not None and _nombre_col_dg is not None:
-                        _dg_area["_area_rescate_m2"] = clean_number_series(
-                            _dg_area[_area_col_dg]
-                        )
-                        _dg_area["_cc_key_rescate_area"] = coalesce_cc_from_columns(
-                            _dg_area,
-                            _cc_cols_dg
-                        )
-                        _dg_area["_nombre_key_rescate_area"] = (
-                            _dg_area[_nombre_col_dg]
-                            .fillna("")
-                            .astype(str)
-                            .apply(normalize_brand_name)
-                        )
-
-                        _area_lookup = (
-                            _dg_area[
-                                _dg_area["_area_rescate_m2"].notna()
-                                & (_dg_area["_area_rescate_m2"] > 0)
-                                & _dg_area["_cc_key_rescate_area"].fillna("").astype(str).str.strip().ne("")
-                                & _dg_area["_nombre_key_rescate_area"].fillna("").astype(str).str.strip().ne("")
-                            ]
-                            .groupby(
-                                [
-                                    "_cc_key_rescate_area",
-                                    "_nombre_key_rescate_area"
-                                ],
-                                dropna=False
-                            )["_area_rescate_m2"]
-                            .max()
-                            .reset_index()
-                        )
-
-                        detalle_tabla["_cc_key_rescate_area"] = detalle_tabla[
-                            "Centro comercial"
-                        ].apply(cc_key)
-
-                        detalle_tabla["_nombre_key_rescate_area"] = detalle_tabla[
-                            "Nombre Comercial"
-                        ].fillna("").astype(str).apply(normalize_brand_name)
-
-                        detalle_tabla = detalle_tabla.merge(
-                            _area_lookup,
-                            on=[
-                                "_cc_key_rescate_area",
-                                "_nombre_key_rescate_area"
-                            ],
-                            how="left"
-                        )
-
-                        _mask_area_vacia = (
-                            detalle_tabla["Área (m²)"].isna()
-                            & detalle_tabla["_area_rescate_m2"].notna()
-                            & (detalle_tabla["_area_rescate_m2"] > 0)
-                        )
-
-                        detalle_tabla.loc[
-                            _mask_area_vacia,
-                            "Área (m²)"
-                        ] = detalle_tabla.loc[
-                            _mask_area_vacia,
-                            "_area_rescate_m2"
-                        ]
-
-                        detalle_tabla = detalle_tabla.drop(
-                            columns=[
-                                "_cc_key_rescate_area",
-                                "_nombre_key_rescate_area",
-                                "_area_rescate_m2"
-                            ],
-                            errors="ignore"
-                        )
-            except Exception:
-                pass
-
-            # Recalcular densidad local si ya se rescató demanda y/o área.
-            _demanda_detalle_num = pd.to_numeric(
-                detalle_tabla["Demanda máxima anual (kW)"],
-                errors="coerce"
-            )
-            _area_detalle_num = pd.to_numeric(
-                detalle_tabla["Área (m²)"],
-                errors="coerce"
-            )
-            _mask_recalc_densidad = (
-                _demanda_detalle_num.notna()
-                & (_demanda_detalle_num > 0)
-                & _area_detalle_num.notna()
-                & (_area_detalle_num > 0)
-            )
-            detalle_tabla.loc[
-                _mask_recalc_densidad,
-                "Densidad local (W/m²)"
-            ] = (
-                _demanda_detalle_num.loc[_mask_recalc_densidad]
-                / _area_detalle_num.loc[_mask_recalc_densidad]
-                * 1000
-            )
-
-            # Deduplicar por CC + no_servicio sin ceros iniciales.
-            # Esto evita que salgan dos renglones del mismo servicio:
-            # 056190... y 56190...
-            if "No. de servicio" in detalle_tabla.columns:
-                detalle_tabla["_cc_key_dedup"] = detalle_tabla[
-                    "Centro comercial"
-                ].apply(cc_key)
-                detalle_tabla["_servicio_key_dedup"] = (
-                    normalize_service_cc(detalle_tabla["No. de servicio"])
-                    .astype(str)
-                    .str.lstrip("0")
-                )
-
-                # Mantener el no_servicio completo de 12+ dígitos cuando existe
-                # una versión con y sin cero inicial dentro del mismo CC.
-                detalle_tabla = _aplicar_no_servicio_canonico_por_grupo(
-                    detalle_tabla,
-                    group_cols=["_cc_key_dedup", "_servicio_key_dedup"],
-                    servicio_cols=["No. de servicio"]
-                )
-
-                detalle_tabla["_has_demand_dedup"] = pd.to_numeric(
-                    detalle_tabla["Demanda máxima anual (kW)"],
-                    errors="coerce"
-                ).notna().astype(int)
-                detalle_tabla["_has_area_dedup"] = pd.to_numeric(
-                    detalle_tabla["Área (m²)"],
-                    errors="coerce"
-                ).notna().astype(int)
-                detalle_tabla["_has_file_diag_dedup"] = (
-                    detalle_tabla["file_path diagnóstico"]
-                    .fillna("")
-                    .astype(str)
-                    .str.strip()
-                    .ne("")
-                    .astype(int)
-                    if "file_path diagnóstico" in detalle_tabla.columns
-                    else 0
-                )
-
-                detalle_tabla = (
-                    detalle_tabla
-                    .sort_values(
-                        [
-                            "_cc_key_dedup",
-                            "_servicio_key_dedup",
-                            "_has_demand_dedup",
-                            "_has_area_dedup",
-                            "_has_file_diag_dedup",
-                            "Demanda máxima anual (kW)"
-                        ],
-                        ascending=[
-                            True,
-                            True,
-                            False,
-                            False,
-                            False,
-                            False
-                        ],
-                        na_position="last"
-                    )
-                    .drop_duplicates(
-                        subset=[
-                            "_cc_key_dedup",
-                            "_servicio_key_dedup"
-                        ],
-                        keep="first"
-                    )
-                    .drop(
-                        columns=[
-                            "_cc_key_dedup",
-                            "_servicio_key_dedup",
-                            "_has_demand_dedup",
-                            "_has_area_dedup",
-                            "_has_file_diag_dedup"
-                        ],
-                        errors="ignore"
-                    )
-                )
 
             detalle_tabla = (
                 detalle_tabla
@@ -13529,10 +11011,7 @@ with tab_resumen:
                 "Demanda máxima anual (kW)",
                 "Demanda NREL original (kW)",
                 "Factor ajuste Allux PDBT",
-                "Densidad agregada (W/m²)",
-                "kWh total diagnóstico",
-                "kwmax diagnóstico",
-                "Demanda contratada diagnóstico"
+                "Densidad promedio (W/m²)"
             ]:
                 if col_num in detalle_tabla.columns:
                     detalle_tabla[col_num] = pd.to_numeric(
@@ -13552,10 +11031,12 @@ with tab_resumen:
             )
 
             st.caption(
-                "La Densidad agregada (W/m²) se calcula como suma de Demanda máxima anual (kW) "
-                "/ suma de área (m²) × 1,000 para todos los locales que cumplen los filtros. "
-                "La densidad local se conserva únicamente para el detalle por local. "
-                + NOTA_DEMANDA_MAXIMA_ANUAL
+                "La Demanda máxima anual (kW) se calcula como el promedio de la demanda anual "
+                "de los locales dentro del grupo seleccionado. "
+                "El Área promedio (m²) se calcula como el promedio del área de esos mismos locales. "
+                "La Densidad promedio (W/m²) se calcula como el promedio de la densidad individual "
+                "de cada local, no como demanda agregada / área agregada. "
+                + NOTA_DEMANDA_PROMEDIO_ANUAL
             )
 
 
@@ -13601,7 +11082,7 @@ with tab_general:
     ).round(1)
 
     usuarios_mt_bt_display = usuarios_mt_bt.copy()
-    usuarios_mt_bt_display["(%)"] = usuarios_mt_bt_display["(%)"].map(lambda x: f"{x:.0f}%")
+    usuarios_mt_bt_display["(%)"] = usuarios_mt_bt_display["(%)"].map(lambda x: f"{x:.1f}%")
 
     col_usuarios, col_demanda = st.columns(2)
 
@@ -13611,14 +11092,12 @@ with tab_general:
             unsafe_allow_html=True
         )
 
-        ax_usuarios = usuarios_mt_bt.set_index("Nivel de tensión").plot.pie(
+        fig_usuarios = usuarios_mt_bt.set_index("Nivel de tensión").plot.pie(
             y="Número de usuarios",
-            autopct="%1.0f%%",
+            autopct="%1.1f%%",
             figsize=(4, 4),
             legend=False
-        )
-        ax_usuarios.set_ylabel("")
-        fig_usuarios = ax_usuarios.figure
+        ).figure
 
         st.pyplot(fig_usuarios)
 
@@ -13652,7 +11131,7 @@ with tab_general:
                 ]
             )
 
-            demanda_promedio_col = first_existing_column(
+            demanda_maxima_col = first_existing_column(
                 demanda_portafolio,
                 [
                     "Demanda máxima anual (kW)",
@@ -13665,7 +11144,7 @@ with tab_general:
                     "No encontré columna de tarifa en la base validada para clasificar BT/MT."
                 )
 
-            elif demanda_promedio_col is None:
+            elif demanda_maxima_col is None:
                 st.info(
                     "No encontré columna de Demanda máxima anual (kW) en la base validada."
                 )
@@ -13696,8 +11175,8 @@ with tab_general:
                 ].copy()
 
                 demanda_portafolio = demanda_portafolio[
-                    demanda_portafolio["Demanda máxima anual (kW)"].notna()
-                    & demanda_portafolio["Demanda máxima anual (kW)"].gt(0)
+                    demanda_portafolio[demanda_maxima_col].notna()
+                    & demanda_portafolio[demanda_maxima_col].gt(0)
                 ].copy()
 
                 if demanda_portafolio.empty:
@@ -13708,17 +11187,15 @@ with tab_general:
                 else:
                     demanda_mt_bt = (
                         demanda_portafolio
-                        .groupby("Nivel de tensión", dropna=False)["Demanda máxima anual (kW)"]
+                        .groupby("Nivel de tensión", dropna=False)[demanda_maxima_col]
                         .sum()
                         .reset_index()
                     )
 
-                    total_demanda_mt_bt = demanda_mt_bt[
-                        "Demanda máxima anual (kW)"
-                    ].sum(skipna=True)
+                    total_demanda_mt_bt = demanda_mt_bt[demanda_maxima_col].sum(skipna=True)
 
                     demanda_mt_bt["(%)"] = (
-                        demanda_mt_bt["Demanda máxima anual (kW)"]
+                        demanda_mt_bt[demanda_maxima_col]
                         / total_demanda_mt_bt
                         * 100
                         if total_demanda_mt_bt > 0
@@ -13727,24 +11204,22 @@ with tab_general:
 
                     demanda_mt_bt_display = demanda_mt_bt.copy()
 
-                    demanda_mt_bt_display["Demanda máxima anual (kW)"] = (
-                        demanda_mt_bt_display["Demanda máxima anual (kW)"]
+                    demanda_mt_bt_display[demanda_maxima_col] = (
+                        demanda_mt_bt_display[demanda_maxima_col]
                         .round(1)
                     )
 
                     demanda_mt_bt_display["(%)"] = (
                         demanda_mt_bt_display["(%)"]
-                        .map(lambda x: f"{x:.0f}%" if pd.notna(x) else "—")
+                        .map(lambda x: f"{x:.1f}%" if pd.notna(x) else "—")
                     )
 
-                    ax_demanda = demanda_mt_bt.set_index("Nivel de tensión").plot.pie(
-                        y="Demanda máxima anual (kW)",
-                        autopct="%1.0f%%",
+                    fig_demanda = demanda_mt_bt.set_index("Nivel de tensión").plot.pie(
+                        y=demanda_maxima_col,
+                        autopct="%1.1f%%",
                         figsize=(4, 4),
                         legend=False
-                    )
-                    ax_demanda.set_ylabel("")
-                    fig_demanda = ax_demanda.figure
+                    ).figure
 
                     st.pyplot(fig_demanda)
 
@@ -13758,118 +11233,205 @@ with tab_general:
                         "Esta gráfica suma la Demanda máxima anual (kW) de todos los locales ocupados con recibo "
                         "en todos los centros comerciales, agrupada por nivel de tensión derivado de la tarifa: "
                         "BT = PDBT + GDBT; MT = GDMTH + GDMTO. "
-                        + NOTA_DEMANDA_MAXIMA_ANUAL
+                        + NOTA_DEMANDA_PROMEDIO_ANUAL
                     )
 
     # ============================================================
-    # Distribución por clima y tipo de centro comercial
+    # Distribución por Clima
     # ============================================================
 
     st.markdown(
-        '<div class="section-title">Distribución por clima</div>',
+        '<div class="section-title">Distribución por Clima</div>',
+        unsafe_allow_html=True
+    )
+
+    climate_mapping_path = DATA_DIR / "profiles" / "cc_climate_zone_mapping.csv"
+
+    if climate_mapping_path.exists():
+
+        climate_mapping_df = pd.read_csv(
+            climate_mapping_path,
+            encoding="latin-1"
+        )
+
+        climate_mapping_df.columns = (
+            climate_mapping_df.columns
+            .str.strip()
+            .str.lower()
+        )
+
+        def clasificar_macro_clima(zona):
+            zona = str(zona).strip()
+
+            if zona in ["Hot-Humid", "Hot-Dry"]:
+                return "Cálido"
+
+            if zona in ["Mixed-Humid", "Mixed-Dry"]:
+                return "Templado"
+
+            if zona in ["Cold", "Cold / Very Cold"]:
+                return "Frío"
+
+            return "Sin clasificar"
+
+        climate_mapping_df["Macro clima"] = climate_mapping_df["zona_nrel"].apply(
+            clasificar_macro_clima
+        )
+
+        clima_dist = (
+            climate_mapping_df
+            .groupby("Macro clima")
+            .size()
+            .reset_index(name="Centros comerciales")
+        )
+
+        total_cc_clima = clima_dist["Centros comerciales"].sum()
+
+        clima_dist["(%)"] = (
+            clima_dist["Centros comerciales"] / total_cc_clima * 100
+        ).round(1)
+
+        orden_clima = {
+            "Cálido": 1,
+            "Templado": 2,
+            "Frío": 3,
+            "Sin clasificar": 4
+        }
+
+        clima_dist["_orden"] = clima_dist["Macro clima"].map(orden_clima).fillna(999)
+
+        clima_dist = clima_dist.sort_values("_orden").drop(columns=["_orden"])
+
+        # Data para barra horizontal apilada 100%
+        clima_bar = pd.DataFrame({
+            row["Macro clima"]: [row["(%)"]]
+            for _, row in clima_dist.iterrows()
+        })
+
+        fig, ax = plt.subplots(figsize=(8, 1.6))
+
+        clima_bar.plot(
+            kind="barh",
+            stacked=True,
+            ax=ax,
+            legend=True
+        )
+
+        ax.set_xlim(0, 100)
+        ax.set_yticks([])
+
+        ax.set_title(
+            "Distribución de centros comerciales por clima",
+            fontsize=7
+        )
+
+        ax.set_xlabel(
+            "% de centros comerciales",
+            fontsize=7
+        )
+
+        for container in ax.containers:
+            ax.bar_label(
+                container,
+                label_type="center",
+                fmt="%.1f%%",
+                fontsize=7
+            )
+
+        ax.legend(
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.35),
+            ncol=len(clima_dist),
+            fontsize=7
+        )
+
+        st.pyplot(fig)
+
+        clima_dist_display = clima_dist.copy()
+        clima_dist_display["(%)"] = clima_dist_display["(%)"].map(lambda x: f"{x:.1f}%")
+
+        st.dataframe(
+            clima_dist_display,
+            use_container_width=True,
+            hide_index=True
+        )
+
+    else:
+        st.warning(
+            f"No encontré el archivo de mapeo climático: {climate_mapping_path}"
+        )
+
+    # ============================================================
+    # Distribución por tipo de centro comercial
+    # ============================================================
+
+    st.markdown(
+        '<div class="section-title">Distribución por tipo de centro comercial</div>',
         unsafe_allow_html=True
     )
 
     cc_master_path = DATA_DIR / "profiles" / "cc_master_data.csv"
 
-    if not cc_master_path.exists():
-        st.warning(f"No encontré el archivo maestro de centros comerciales: {cc_master_path}")
+    if cc_master_path.exists():
 
-    else:
-        cc_master_dist = pd.read_csv(cc_master_path)
-        cc_master_dist.columns = cc_master_dist.columns.str.strip()
+        cc_master_df = pd.read_csv(cc_master_path)
 
-        cc_col_dist = first_existing_column(
-            cc_master_dist,
-            [
-                "Nombre Comercial",
-                "centro_comercial",
-                "Centro Comercial",
-                "NOMBRE DEL CC",
-                "Nombre del CC",
-                "CC",
-                "Plaza",
-                "PLAZA"
-            ]
+        cc_master_df.columns = (
+            cc_master_df.columns
+            .str.strip()
         )
 
-        tipo_col_dist = first_existing_column(
-            cc_master_dist,
-            [
-                "Tipo de Mall",
-                "Tipo de centro comercial",
-                "tipo_cc",
-                "TIPO_CC",
-                "Tipo CC"
-            ]
-        )
+        tipo_cc_col = "Tipo de Mall"
 
-        zona_col_dist = first_existing_column(
-            cc_master_dist,
-            [
-                "zona_nrel",
-                "Zona NREL",
-                "ZONA_NREL",
-                "climate_zone",
-                "Climate Zone",
-                "CLIMATE_ZONE",
-                "zona_climatica",
-                "Zona climática"
-            ]
-        )
+        if tipo_cc_col in cc_master_df.columns:
 
-        area_col_dist = first_existing_column(
-            cc_master_dist,
-            [
-                "Área Bruta Rentable (m²)",
-                "Area Bruta Rentable (m2)",
-                "ARB",
-                "ABR",
-                "GLA",
-                "m2",
-                "M2",
-                "Area m2",
-                "Área m2"
-            ]
-        )
+            tipo_cc_dist = (
+                cc_master_df
+                .groupby(tipo_cc_col)
+                .size()
+                .reset_index(name="Centros comerciales")
+                .rename(columns={tipo_cc_col: "Tipo de centro comercial"})
+            )
 
-        def clasificar_macro_clima_portafolio(zona):
-            zona_upper = str(zona).upper().strip()
+            total_tipo_cc = tipo_cc_dist["Centros comerciales"].sum()
 
-            if "HOT" in zona_upper or "CALIDO" in zona_upper or "CÁLIDO" in zona_upper:
-                return "Cálido"
+            tipo_cc_dist["(%)"] = (
+                tipo_cc_dist["Centros comerciales"] / total_tipo_cc * 100
+            ).round(1)
 
-            if "MIXED" in zona_upper or "TEMPLADO" in zona_upper:
-                return "Templado"
+            tipo_cc_dist = tipo_cc_dist.sort_values(
+                "(%)",
+                ascending=False
+            )
 
-            if "COLD" in zona_upper or "FRIO" in zona_upper or "FRÍO" in zona_upper:
-                return "Frío"
+            orden_tipo_cc = {
+                "Luxury Fashion Mall": 1,
+                "Fashion Mall": 2,
+                "Regional Mall": 3,
+                "Power Center": 4,
+                "Strip Mall": 5
+            }
 
-            return "Sin clasificar"
+            tipo_cc_dist["_orden"] = (
+                tipo_cc_dist["Tipo de centro comercial"]
+                .map(orden_tipo_cc)
+                .fillna(999)
+            )
 
-        def grafica_distribucion_100(df_dist, categoria_col, valor_col, titulo, xlabel):
-            if df_dist.empty or valor_col not in df_dist.columns:
-                st.info(f"No hay datos suficientes para graficar {titulo.lower()}.")
-                return
+            tipo_cc_dist = (
+                tipo_cc_dist
+                .sort_values("_orden")
+                .drop(columns=["_orden"])
+            )
 
-            base_grafica = df_dist[[categoria_col, valor_col]].copy()
-            base_grafica[valor_col] = pd.to_numeric(base_grafica[valor_col], errors="coerce").fillna(0)
-            total_valor = base_grafica[valor_col].sum(skipna=True)
-
-            if total_valor <= 0:
-                st.info(f"No hay valores positivos para graficar {titulo.lower()}.")
-                return
-
-            base_grafica["(%)"] = base_grafica[valor_col] / total_valor * 100
-
-            bar_data = pd.DataFrame({
-                row[categoria_col]: [row["(%)"]]
-                for _, row in base_grafica.iterrows()
+            tipo_cc_bar = pd.DataFrame({
+                row["Tipo de centro comercial"]: [row["(%)"]]
+                for _, row in tipo_cc_dist.iterrows()
             })
 
             fig, ax = plt.subplots(figsize=(8, 1.6))
 
-            bar_data.plot(
+            tipo_cc_bar.plot(
                 kind="barh",
                 stacked=True,
                 ax=ax,
@@ -13877,321 +11439,48 @@ with tab_general:
             )
 
             ax.set_xlim(0, 100)
+            ax.set_xlabel(
+                "% de centros comerciales",
+                fontsize=8
+            )
             ax.set_yticks([])
-            ax.set_title(titulo, fontsize=8)
-            ax.set_xlabel(xlabel, fontsize=8)
+            ax.set_title(
+                "Distribución de centros comerciales por tipo",
+                fontsize=8
+            )
 
             for container in ax.containers:
                 ax.bar_label(
                     container,
                     label_type="center",
-                    fmt="%.0f%%",
-                    fontsize=7
+                    fmt="%.1f%%",
+                    fontsize=8
                 )
 
             ax.legend(
                 loc="upper center",
                 bbox_to_anchor=(0.5, -0.35),
-                ncol=max(1, len(base_grafica)),
+                ncol=4,
                 fontsize=7,
                 frameon=False
             )
 
             st.pyplot(fig)
 
-        if cc_col_dist is None:
-            st.warning("No encontré columna de centro comercial en cc_master_data.csv.")
+            tipo_cc_display = tipo_cc_dist.copy()
+            tipo_cc_display["(%)"] = tipo_cc_display["(%)"].map(lambda x: f"{x:.1f}%")
+
+            st.dataframe(
+                tipo_cc_display,
+                use_container_width=True,
+                hide_index=True
+            )
+
         else:
-            cc_master_dist["_cc_key_dist"] = cc_master_dist[cc_col_dist].apply(cc_key)
-            cc_master_dist["Centro Comercial"] = cc_master_dist[cc_col_dist].apply(limpiar_nombre_cc)
+            st.warning("No encontré la columna 'Tipo de Mall' en cc_master_data.csv.")
 
-            cc_master_dist["_m2_master_dist"] = (
-                clean_number_series(cc_master_dist[area_col_dist])
-                if area_col_dist
-                else pd.Series(pd.NA, index=cc_master_dist.index)
-            )
-
-            if zona_col_dist:
-                cc_master_dist["Clima"] = cc_master_dist[zona_col_dist].apply(
-                    clasificar_macro_clima_portafolio
-                )
-            else:
-                cc_master_dist["Clima"] = "Sin clasificar"
-
-            if tipo_col_dist:
-                cc_master_dist["Tipo de centro comercial"] = (
-                    cc_master_dist[tipo_col_dist]
-                    .fillna("Sin clasificar")
-                    .astype(str)
-                    .str.strip()
-                    .replace({"": "Sin clasificar", "nan": "Sin clasificar", "None": "Sin clasificar"})
-                )
-            else:
-                cc_master_dist["Tipo de centro comercial"] = "Sin clasificar"
-
-            general_dist = resumen_general.copy() if "resumen_general" in globals() else pd.DataFrame()
-
-            if not general_dist.empty:
-                general_cc_col_dist = first_existing_column(
-                    general_dist,
-                    [
-                        "NOMBRE DEL CC",
-                        "CENTRO COMERCIAL",
-                        "CC",
-                        "PLAZA",
-                        "source_sheet"
-                    ]
-                )
-
-                general_area_col_dist = first_existing_column(
-                    general_dist,
-                    [
-                        "AREA_M2_num",
-                        "AREA M2_num",
-                        "SUPERFICIE_num",
-                        "SUPERFICIE M2_num",
-                        "MTS2",
-                        "M2",
-                        "m2",
-                        "MTS 2",
-                        "MTS²",
-                        "AREA_M2",
-                        "AREA M2",
-                        "SUPERFICIE",
-                        "SUPERFICIE M2",
-                        "Área",
-                        "Area",
-                        "AREA",
-                        "Superficie"
-                    ]
-                )
-
-                if general_cc_col_dist:
-                    general_dist["_cc_key_dist"] = general_dist[general_cc_col_dist].apply(cc_key)
-                    general_dist["_m2_local_dist"] = (
-                        clean_number_series(general_dist[general_area_col_dist])
-                        if general_area_col_dist
-                        else pd.Series(pd.NA, index=general_dist.index)
-                    )
-
-                    locales_por_cc = (
-                        general_dist.groupby("_cc_key_dist", dropna=False)
-                        .agg(
-                            Locales=("_cc_key_dist", "size"),
-                            M2=("_m2_local_dist", "sum")
-                        )
-                        .reset_index()
-                    )
-                else:
-                    locales_por_cc = pd.DataFrame(columns=["_cc_key_dist", "Locales", "M2"])
-            else:
-                locales_por_cc = pd.DataFrame(columns=["_cc_key_dist", "Locales", "M2"])
-
-            cc_dist_base = cc_master_dist.merge(
-                locales_por_cc,
-                on="_cc_key_dist",
-                how="left"
-            )
-
-            cc_dist_base["Locales"] = pd.to_numeric(
-                cc_dist_base["Locales"],
-                errors="coerce"
-            ).fillna(0)
-
-            # Para distribución por m² usamos la suma de áreas de los locales que componen cada CC.
-            # Si faltara el área de DG, usamos el área maestra como respaldo.
-            cc_dist_base["M2"] = pd.to_numeric(
-                cc_dist_base.get("M2"),
-                errors="coerce"
-            )
-
-            cc_dist_base["_m2_cc_dist"] = cc_dist_base["M2"].where(
-                cc_dist_base["M2"].gt(0),
-                pd.to_numeric(
-                    cc_dist_base.get("_m2_master_dist"),
-                    errors="coerce"
-                )
-            ).fillna(0)
-
-            orden_clima_dist = {"Cálido": 1, "Templado": 2, "Frío": 3, "Sin clasificar": 99}
-            orden_tipo_dist = {
-                "Luxury Fashion Mall": 1,
-                "Fashion Mall": 2,
-                "Regional Mall": 3,
-                "Power Center": 4,
-                "Strip Mall": 5,
-                "Sin clasificar": 99
-            }
-
-            # --------------------------------------------------------
-            # Clima
-            # --------------------------------------------------------
-
-            resumen_clima_dist = (
-                cc_dist_base
-                .groupby("Clima", dropna=False)
-                .agg(
-                    Locales=("Locales", "sum"),
-                    M2=("_m2_cc_dist", "sum")
-                )
-                .reset_index()
-            )
-
-            resumen_clima_dist["_orden"] = resumen_clima_dist["Clima"].map(orden_clima_dist).fillna(99)
-            resumen_clima_dist = resumen_clima_dist.sort_values("_orden").drop(columns="_orden")
-
-            total_locales_clima = resumen_clima_dist["Locales"].sum(skipna=True)
-            total_m2_clima = resumen_clima_dist["M2"].sum(skipna=True)
-
-            resumen_clima_dist["Locales (%)"] = (
-                resumen_clima_dist["Locales"] / total_locales_clima * 100
-                if total_locales_clima > 0
-                else pd.NA
-            )
-
-            resumen_clima_dist["M2 (%)"] = (
-                resumen_clima_dist["M2"] / total_m2_clima * 100
-                if total_m2_clima > 0
-                else pd.NA
-            )
-
-            st.markdown(
-                '<div class="subsection-title">Por número de locales</div>',
-                unsafe_allow_html=True
-            )
-
-            grafica_distribucion_100(
-                resumen_clima_dist,
-                "Clima",
-                "Locales",
-                "Distribución de locales por clima",
-                "% de locales"
-            )
-
-            st.markdown(
-                '<div class="subsection-title">Por m² de centros comerciales</div>',
-                unsafe_allow_html=True
-            )
-
-            grafica_distribucion_100(
-                resumen_clima_dist,
-                "Clima",
-                "M2",
-                "Distribución de m² de centros comerciales por clima",
-                "% de m²"
-            )
-
-            tabla_clima_dist = resumen_clima_dist.copy()
-            tabla_clima_dist["Locales"] = pd.to_numeric(tabla_clima_dist["Locales"], errors="coerce").round(0).astype("Int64")
-            tabla_clima_dist["Locales (%)"] = pd.to_numeric(tabla_clima_dist["Locales (%)"], errors="coerce").round(0)
-            tabla_clima_dist["M2"] = pd.to_numeric(tabla_clima_dist["M2"], errors="coerce").round(1)
-            tabla_clima_dist["M2 (%)"] = pd.to_numeric(tabla_clima_dist["M2 (%)"], errors="coerce").round(0)
-
-            tabla_clima_dist = tabla_clima_dist[
-                ["Clima", "Locales", "Locales (%)", "M2", "M2 (%)"]
-            ]
-
-            tabla_clima_dist.columns = pd.MultiIndex.from_tuples([
-                ("Clima", ""),
-                ("Por número de locales", "Locales"),
-                ("Por número de locales", "%"),
-                ("Por m² de centros comerciales", "m²"),
-                ("Por m² de centros comerciales", "%")
-            ])
-
-            st.dataframe(
-                tabla_clima_dist,
-                use_container_width=True,
-                hide_index=True
-            )
-
-            # --------------------------------------------------------
-            # Tipo de centro comercial
-            # --------------------------------------------------------
-
-            st.markdown(
-                '<div class="section-title">Distribución por tipo de centro comercial</div>',
-                unsafe_allow_html=True
-            )
-
-            resumen_tipo_dist = (
-                cc_dist_base
-                .groupby("Tipo de centro comercial", dropna=False)
-                .agg(
-                    Locales=("Locales", "sum"),
-                    M2=("_m2_cc_dist", "sum")
-                )
-                .reset_index()
-            )
-
-            resumen_tipo_dist["_orden"] = resumen_tipo_dist["Tipo de centro comercial"].map(orden_tipo_dist).fillna(99)
-            resumen_tipo_dist = resumen_tipo_dist.sort_values("_orden").drop(columns="_orden")
-
-            total_locales_tipo = resumen_tipo_dist["Locales"].sum(skipna=True)
-            total_m2_tipo = resumen_tipo_dist["M2"].sum(skipna=True)
-
-            resumen_tipo_dist["Locales (%)"] = (
-                resumen_tipo_dist["Locales"] / total_locales_tipo * 100
-                if total_locales_tipo > 0
-                else pd.NA
-            )
-
-            resumen_tipo_dist["M2 (%)"] = (
-                resumen_tipo_dist["M2"] / total_m2_tipo * 100
-                if total_m2_tipo > 0
-                else pd.NA
-            )
-
-            st.markdown(
-                '<div class="subsection-title">Por número de locales</div>',
-                unsafe_allow_html=True
-            )
-
-            grafica_distribucion_100(
-                resumen_tipo_dist,
-                "Tipo de centro comercial",
-                "Locales",
-                "Distribución de locales por tipo de centro comercial",
-                "% de locales"
-            )
-
-            st.markdown(
-                '<div class="subsection-title">Por m² de centros comerciales</div>',
-                unsafe_allow_html=True
-            )
-
-            grafica_distribucion_100(
-                resumen_tipo_dist,
-                "Tipo de centro comercial",
-                "M2",
-                "Distribución de m² de centros comerciales por tipo",
-                "% de m²"
-            )
-
-            tabla_tipo_dist = resumen_tipo_dist.copy()
-            tabla_tipo_dist["Locales"] = pd.to_numeric(tabla_tipo_dist["Locales"], errors="coerce").round(0).astype("Int64")
-            tabla_tipo_dist["Locales (%)"] = pd.to_numeric(tabla_tipo_dist["Locales (%)"], errors="coerce").round(0)
-            tabla_tipo_dist["M2"] = pd.to_numeric(tabla_tipo_dist["M2"], errors="coerce").round(1)
-            tabla_tipo_dist["M2 (%)"] = pd.to_numeric(tabla_tipo_dist["M2 (%)"], errors="coerce").round(0)
-
-            tabla_tipo_dist = tabla_tipo_dist[
-                ["Tipo de centro comercial", "Locales", "Locales (%)", "M2", "M2 (%)"]
-            ]
-
-            tabla_tipo_dist.columns = pd.MultiIndex.from_tuples([
-                ("Tipo de centro comercial", ""),
-                ("Por número de locales", "Locales"),
-                ("Por número de locales", "%"),
-                ("Por m² de centros comerciales", "m²"),
-                ("Por m² de centros comerciales", "%")
-            ])
-
-            st.dataframe(
-                tabla_tipo_dist,
-                use_container_width=True,
-                hide_index=True
-            )
-
+    else:
+        st.warning(f"No encontré el archivo maestro de centros comerciales: {cc_master_path}")
 
 with tab_cc:
 
@@ -14944,7 +12233,7 @@ with tab_cc:
 
             tarifa_comp_display["(%)"] = (
                 tarifa_comp_display["(%)"]
-                .map(lambda x: f"{x:.0f}%")
+                .map(lambda x: f"{x:.1f}%")
             )
 
             col_tarifa_pie, col_tarifa_table = st.columns(
@@ -15044,7 +12333,7 @@ with tab_cc:
 
             giro_comp_display["(%)"] = (
                 giro_comp_display["(%)"]
-                .map(lambda x: f"{x:.0f}%")
+                .map(lambda x: f"{x:.1f}%")
             )
 
             col_giro_pie, col_giro_table = st.columns(
@@ -15342,7 +12631,7 @@ with tab_cc:
             demanda_df.loc[
                 mask_pdbt_demanda & mask_sin_contratada_demanda,
                 "demanda_contratada_kw"
-            ] = 3
+            ] = 25
 
             demanda_df["Demanda contratada kW"] = demanda_df["demanda_contratada_kw"]
 
@@ -15517,9 +12806,20 @@ with tab_cc:
             # Demanda máxima anual
             # --------------------------------------------------------
 
-            demanda_df["Demanda máxima anual (kW)"] = clean_number_series(
-                demanda_df["demanda_maxima_anual_kw"]
-            )
+            if "demanda_maxima_anual_kw" in demanda_df.columns:
+                demanda_df["Demanda máxima anual (kW)"] = clean_number_series(
+                    demanda_df["demanda_maxima_anual_kw"]
+                )
+            else:
+                demanda_df["Demanda máxima anual (kW)"] = pd.NA
+
+            # Conservamos promedio como referencia, pero ya no es la métrica principal.
+            if "demanda_promedio_anual_kw" in demanda_df.columns:
+                demanda_df["Demanda promedio anual (kW)"] = clean_number_series(
+                    demanda_df["demanda_promedio_anual_kw"]
+                )
+            else:
+                demanda_df["Demanda promedio anual (kW)"] = pd.NA
 
             demanda_df["Demanda contratada kW"] = clean_number_series(
                 demanda_df["Demanda contratada kW"]
@@ -15529,7 +12829,7 @@ with tab_cc:
             # No eliminar locales ocupados con recibo
             # --------------------------------------------------------
             # La sección debe conservar todos los locales de muestra_cc_global.
-            # Si falta demanda contratada o demanda real, el local se conserva
+            # Si falta demanda contratada o demanda máxima, el local se conserva
             # y se muestra con estatus pendiente.
 
             demanda_df["Demanda contratada kW"] = pd.to_numeric(
@@ -15539,6 +12839,11 @@ with tab_cc:
 
             demanda_df["Demanda máxima anual (kW)"] = pd.to_numeric(
                 demanda_df["Demanda máxima anual (kW)"],
+                errors="coerce"
+            )
+
+            demanda_df["Demanda promedio anual (kW)"] = pd.to_numeric(
+                demanda_df["Demanda promedio anual (kW)"],
                 errors="coerce"
             )
 
@@ -15622,7 +12927,7 @@ with tab_cc:
                 ).reset_index(drop=True)
 
                 st.markdown(
-                    '<div class="subsection-title">Resumen de Demanda Contratada Vs Demanda Máxima Anual</div>',
+                    '<div class="subsection-title">Resumen de demanda contratada vs demanda máxima anual</div>',
                     unsafe_allow_html=True
                 )
 
@@ -15639,21 +12944,26 @@ with tab_cc:
                 )
 
                 col_dem_2.metric(
-                    "Demanda contratada total (kW)",
-                    format_number(demanda_df["Demanda contratada kW"].sum(), 0)
+                    "Demanda contratada total kW",
+                    format_number(demanda_df["Demanda contratada kW"].sum(), 1)
                 )
 
                 col_dem_3.metric(
                     "Demanda máxima anual (kW)",
-                    format_number(demanda_df["Demanda máxima anual (kW)"].sum(), 0)
+                    format_number(demanda_df["Demanda máxima anual (kW)"].sum(), 1)
                 )
 
                 col_dem_4.metric(
-                    "Uso máximo Vs Contratada",
-                    f"{demanda_df['Máxima anual (%)'].mean():,.0f}%"
+                    "Uso máximo anual vs contratada",
+                    f"{demanda_df['Máxima anual (%)'].mean():,.1f}%"
                 )
 
-                st.caption(NOTA_DEMANDA_MAXIMA_ANUAL)
+                st.caption(
+                    "Nota: Demanda máxima anual (kW) = máxima demanda mensual registrada o estimada "
+                    "dentro de la ventana anual disponible. Para GDMTH, GDMTO y GDBT se toma el kwmax "
+                    "del parser; para PDBT se usa la demanda estimada con perfiles NREL cuando existe "
+                    "información suficiente."
+                )
 
                 # --------------------------------------------------------
                 # Base para gráfica
@@ -15698,15 +13008,15 @@ with tab_cc:
 
                 ax.set_ylim(0, 200)
 
-                promedio_anual_max_grafica = pd.to_numeric(
+                maxima_anual_max_grafica = pd.to_numeric(
                     demanda_df["Máxima anual (%)"],
                     errors="coerce"
                 ).max()
 
-                if pd.notna(promedio_anual_max_grafica) and promedio_anual_max_grafica > 200:
+                if pd.notna(maxima_anual_max_grafica) and maxima_anual_max_grafica > 200:
                     st.caption(
                         f"Nota: existen locales con demanda máxima anual mayor a 200% de la contratada. "
-                        f"El valor máximo es {promedio_anual_max_grafica:,.0f}%, por lo que la gráfica se recortó visualmente para mejorar la lectura."
+                        f"El valor máximo es {maxima_anual_max_grafica:,.1f}%, por lo que la gráfica se recortó visualmente para mejorar la lectura."
                     )
 
                 grupos_tarifa = (
@@ -15849,6 +13159,7 @@ with tab_cc:
                 for col in [
                     "Demanda contratada (kW)",
                     "Demanda máxima anual (kW)",
+                    "Demanda máxima anual (kW)",
                     "Máxima anual (%)"
                 ]:
                     if col in demanda_display.columns:
@@ -15869,7 +13180,7 @@ with tab_cc:
 
                 st.caption(
                     "La demanda contratada se toma de `demanda_contratada_kw`. "
-                    + NOTA_DEMANDA_MAXIMA_ANUAL
+                    + NOTA_DEMANDA_PROMEDIO_ANUAL
                 )
 
         # ============================================================
@@ -15947,38 +13258,32 @@ with tab_cc:
                         densidad_giro["Densidad de demanda W/m2"].notna()
                     ].copy()
 
-                    col_den_1, col_den_2, col_den_3 = st.columns(3)
+                    col_den_1, col_den_2, col_den_3, col_den_4 = st.columns(4)
 
                     col_den_1.metric(
                         "Locales ocupados con recibo del giro",
                         f"{len(densidad_giro):,}"
                     )
 
-                    densidad_agregada_giro_w_m2 = calcular_densidad_agregada_w_m2(
-                        densidad_giro,
-                        "Demanda máxima anual (kW)",
-                        "Area m2"
-                    )
-
-                    area_total_giro_m2 = calcular_area_agregada_m2(
-                        densidad_giro,
-                        "Area m2"
-                    )
-
                     col_den_2.metric(
-                        "Densidad de demanda del giro (W/m²)",
-                        format_number(
-                            densidad_agregada_giro_w_m2,
-                            1
-                        ) if pd.notna(densidad_agregada_giro_w_m2) else "—"
+                        "Locales con densidad calculable",
+                        f"{len(densidad_calculable):,}"
                     )
 
                     col_den_3.metric(
-                        "Área total (m²)",
+                        "Densidad promedio W/m²",
                         format_number(
-                            area_total_giro_m2,
+                            densidad_calculable["Densidad de demanda W/m2"].mean(),
                             1
-                        ) if pd.notna(area_total_giro_m2) else "—"
+                        ) if not densidad_calculable.empty else "—"
+                    )
+
+                    col_den_4.metric(
+                        "Densidad mediana W/m²",
+                        format_number(
+                            densidad_calculable["Densidad de demanda W/m2"].median(),
+                            1
+                        ) if not densidad_calculable.empty else "—"
                     )
 
                     if densidad_giro.empty:
@@ -16016,11 +13321,9 @@ with tab_cc:
 
                         densidad_grafica["x"] = range(len(densidad_grafica))
 
-                        promedio = calcular_densidad_agregada_w_m2(
-                            densidad_grafica,
-                            "Demanda máxima anual (kW)",
-                            "Area m2"
-                        )
+                        promedio = densidad_calculable[
+                            "Densidad de demanda W/m2"
+                        ].mean()
 
                         desv = densidad_calculable[
                             "Densidad de demanda W/m2"
@@ -16067,7 +13370,7 @@ with tab_cc:
                                 promedio,
                                 color="#C00000",
                                 linewidth=1.8,
-                                label="Densidad agregada"
+                                label="Promedio"
                             )
 
                             # +/- 1 desviación estándar: verde
@@ -16326,8 +13629,13 @@ with tab_cc:
                                 "tarifa",
                                 "No servicio",
                                 "Demanda máxima anual (kW)",
+                                "Demanda promedio anual (kW)",
                                 "Area m2",
-                                "Densidad de demanda W/m2"
+                                "Densidad de demanda W/m2",
+                                "criterio_union_demanda",
+                                "estatus_demanda",
+                                "zona_nrel",
+                                "Fuente densidad"
                             ]
                             if col in densidad_display.columns
                         ]
@@ -16338,45 +13646,22 @@ with tab_cc:
 
                         for col in [
                             "Demanda máxima anual (kW)",
+                            "Demanda promedio anual (kW)",
                             "Area m2",
                             "Densidad de demanda W/m2",
                         ]:
                             if col in densidad_display.columns:
-                                dec = 0 if col == "Demanda máxima anual (kW)" else 1
                                 densidad_display[col] = pd.to_numeric(
                                     densidad_display[col],
                                     errors="coerce"
-                                ).round(dec)
+                                ).round(2)
 
-                        densidad_display = densidad_display.rename(columns={
-                            "Nombre": "Nombre comercial",
-                            "Giro": "Giro",
-                            "tarifa": "Tarifa",
-                            "No servicio": "No. de servicio",
-                            "Area m2": "Área (m²)",
-                            "Densidad de demanda W/m2": "Densidad de demanda (W/m²)"
-                        })
-
-                        if "Densidad de demanda (W/m²)" in densidad_display.columns:
+                        if "Densidad de demanda W/m2" in densidad_display.columns:
                             densidad_display = densidad_display.sort_values(
-                                "Densidad de demanda (W/m²)",
+                                "Densidad de demanda W/m2",
                                 ascending=False,
                                 na_position="last"
                             )
-
-                        for col_fmt in ["Demanda máxima anual (kW)"]:
-                            if col_fmt in densidad_display.columns:
-                                densidad_display[col_fmt] = pd.to_numeric(
-                                    densidad_display[col_fmt],
-                                    errors="coerce"
-                                ).map(lambda x: f"{x:,.0f}" if pd.notna(x) else "")
-
-                        for col_fmt in ["Área (m²)", "Densidad de demanda (W/m²)"]:
-                            if col_fmt in densidad_display.columns:
-                                densidad_display[col_fmt] = pd.to_numeric(
-                                    densidad_display[col_fmt],
-                                    errors="coerce"
-                                ).map(lambda x: f"{x:,.1f}" if pd.notna(x) else "")
 
                         st.dataframe(
                             densidad_display,
@@ -16387,17 +13672,15 @@ with tab_cc:
                         st.caption(
                             "Esta sección usa la misma base maestra de densidad del Resumen Ejecutivo, "
                             "filtrada al centro comercial seleccionado y al giro comercial seleccionado. "
-                            "La Densidad de demanda individual se conserva por local; "
-                            "la densidad del giro se calcula como suma de Demanda máxima anual (kW) "
-                            "/ suma de m² × 1,000. "
-                            + NOTA_DEMANDA_MAXIMA_ANUAL
+                            "La Densidad de demanda (W/m²) se calcula como Demanda máxima anual (kW) "
+                            "/ m² × 1,000. Se conserva Demanda máxima anual (kW) como referencia."
                         )
 
 
 with tab_sg:
 
     st.markdown(
-        '<div class="section-title">Densidad de Demanda (kW/m2)</div>',
+        '<div class="section-title">Servicios Generales</div>',
         unsafe_allow_html=True
     )
 
@@ -16516,7 +13799,7 @@ with tab_sg:
                         ]
                     )
 
-                    demanda_promedio_col = first_existing_column(
+                    demanda_maxima_col = first_existing_column(
                         sg_df,
                         [
                             "demanda_maxima_anual_kw",
@@ -16543,8 +13826,8 @@ with tab_sg:
                     )
 
                     sg_df["_demanda_maxima_anual_kw"] = (
-                        pd.to_numeric(sg_df[demanda_promedio_col], errors="coerce")
-                        if demanda_promedio_col
+                        pd.to_numeric(sg_df[demanda_maxima_col], errors="coerce")
+                        if demanda_maxima_col
                         else np.nan
                     )
 
@@ -16607,58 +13890,6 @@ with tab_sg:
 
                     zona_meta = zona_meta.fillna("").astype(str).str.upper()
 
-                    # ------------------------------------------------------------
-                    # ABR desde DG: suma de m² de todos los locales del CC
-                    # ------------------------------------------------------------
-                    abr_dg_por_cc = pd.DataFrame(columns=["_cc_key_sg", "_abr_dg_suma_m2"])
-
-                    if "resumen_general" in globals() and not resumen_general.empty:
-                        dg_abr = resumen_general.copy()
-                        dg_cc_col_abr = first_existing_column(
-                            dg_abr,
-                            [
-                                "NOMBRE DEL CC",
-                                "CENTRO COMERCIAL",
-                                "CC",
-                                "PLAZA",
-                                "source_sheet"
-                            ]
-                        )
-                        dg_area_col_abr = first_existing_column(
-                            dg_abr,
-                            [
-                                "AREA_M2_num",
-                                "AREA M2_num",
-                                "SUPERFICIE_num",
-                                "SUPERFICIE M2_num",
-                                "MTS2",
-                                "M2",
-                                "m2",
-                                "MTS 2",
-                                "MTS²",
-                                "AREA_M2",
-                                "AREA M2",
-                                "SUPERFICIE",
-                                "SUPERFICIE M2",
-                                "Área",
-                                "Area",
-                                "AREA",
-                                "Superficie"
-                            ]
-                        )
-
-                        if dg_cc_col_abr and dg_area_col_abr:
-                            dg_abr["_cc_key_sg"] = dg_abr[dg_cc_col_abr].apply(cc_key)
-                            dg_abr["_area_abr_m2"] = clean_number_series(dg_abr[dg_area_col_abr])
-
-                            abr_dg_por_cc = (
-                                dg_abr
-                                .groupby("_cc_key_sg", dropna=False)["_area_abr_m2"]
-                                .sum(min_count=1)
-                                .reset_index()
-                                .rename(columns={"_area_abr_m2": "_abr_dg_suma_m2"})
-                            )
-
                     cc_meta["_clima_meta"] = np.select(
                         [
                             zona_meta.str.contains("HOT", na=False),
@@ -16682,20 +13913,6 @@ with tab_sg:
                         abr_meta.astype(str).str.replace(",", "", regex=False),
                         errors="coerce"
                     )
-
-                    if not abr_dg_por_cc.empty:
-                        cc_meta = cc_meta.merge(
-                            abr_dg_por_cc,
-                            on="_cc_key_sg",
-                            how="left"
-                        )
-
-                        # Para SG usamos ABR como suma de m² de todos los locales del CC.
-                        cc_meta["_abr_meta"] = cc_meta["_abr_dg_suma_m2"].combine_first(
-                            cc_meta["_abr_meta"]
-                        )
-                    else:
-                        cc_meta["_abr_dg_suma_m2"] = pd.NA
 
                     cc_meta = cc_meta[
                         [
@@ -16795,8 +14012,11 @@ with tab_sg:
                         "No. servicio": sg_locales_df["No. servicio"],
                         "Tipo de Centro Comercial": sg_locales_df["_tipo_cc_meta"],
                         "Clima": sg_locales_df["_clima_meta"],
-                        "Área Bruta Rentable (m²)": sg_locales_df["_abr_meta"],
-                        "No. de servicios": sg_locales_df["No. servicio"],
+                        "No. de medidores de Servicios Generales": (
+                            sg_locales_df[
+                                "No. de medidores de Servicios Generales"
+                            ]
+                        ),
                         "Demanda Contratada (kW)": (
                             sg_locales_df["_demanda_contratada_kw"]
                         ),
@@ -16816,84 +14036,6 @@ with tab_sg:
                         )
                     })
 
-                    # ------------------------------------------------------------
-                    # Agrupar Servicios Generales por centro comercial
-                    # ------------------------------------------------------------
-                    # La tabla ya no se muestra por número de servicio.
-                    # Cada fila representa un centro comercial.
-                    # La densidad se calcula como:
-                    # suma de demandas máximas anuales de SG / ABR del CC × 1,000.
-
-                    sg_resumen_df["_servicio_limpio"] = (
-                        sg_resumen_df["No. de servicios"]
-                        .fillna("")
-                        .astype(str)
-                        .str.strip()
-                    )
-
-                    sg_resumen_df["_servicio_limpio"] = sg_resumen_df[
-                        "_servicio_limpio"
-                    ].replace(
-                        {
-                            "": pd.NA,
-                            "nan": pd.NA,
-                            "None": pd.NA,
-                            "<NA>": pd.NA
-                        }
-                    )
-
-                    sg_resumen_df = (
-                        sg_resumen_df
-                        .groupby(
-                            [
-                                "Centro Comercial",
-                                "Tipo de Centro Comercial",
-                                "Clima"
-                            ],
-                            dropna=False
-                        )
-                        .agg(
-                            **{
-                                "No. de servicios": (
-                                    "_servicio_limpio",
-                                    lambda x: x.dropna().nunique()
-                                ),
-                                "Área Bruta Rentable (m²)": (
-                                    "Área Bruta Rentable (m²)",
-                                    "max"
-                                ),
-                                "Demanda Contratada (kW)": (
-                                    "Demanda Contratada (kW)",
-                                    "sum"
-                                ),
-                                "Demanda máxima anual (kW)": (
-                                    "Demanda máxima anual (kW)",
-                                    "sum"
-                                ),
-                                "Consumo Anual (kWh)": (
-                                    "Consumo Anual (kWh)",
-                                    "sum"
-                                )
-                            }
-                        )
-                        .reset_index()
-                    )
-
-                    sg_resumen_df["Densidad demanda (W/m² ABR)"] = np.where(
-                        sg_resumen_df["Área Bruta Rentable (m²)"].gt(0),
-                        sg_resumen_df["Demanda máxima anual (kW)"]
-                        / sg_resumen_df["Área Bruta Rentable (m²)"]
-                        * 1000,
-                        np.nan
-                    )
-
-                    sg_resumen_df["Densidad de Consumo Anual (kWh/m² ABR)"] = np.where(
-                        sg_resumen_df["Área Bruta Rentable (m²)"].gt(0),
-                        sg_resumen_df["Consumo Anual (kWh)"]
-                        / sg_resumen_df["Área Bruta Rentable (m²)"],
-                        np.nan
-                    )
-
                 if sg_resumen_df.empty:
                     st.info(
                         "No se pudo construir la tabla resumen de Servicios Generales."
@@ -16903,7 +14045,6 @@ with tab_sg:
                     sg_resumen_display = sg_resumen_df.copy()
 
                     for col in [
-                        "Área Bruta Rentable (m²)",
                         "Demanda Contratada (kW)",
                         "Demanda máxima anual (kW)",
                         "Densidad demanda (W/m² ABR)",
@@ -16948,9 +14089,15 @@ with tab_sg:
                         sg_resumen_display
                         .sort_values(
                             [
-                                "Centro Comercial"
+                                "_orden_clima",
+                                "_orden_tipo",
+                                "Centro Comercial",
+                                "Local de Servicios Generales"
                             ],
                             ascending=[
+                                True,
+                                True,
+                                True,
                                 True
                             ]
                         )
@@ -16977,7 +14124,7 @@ with tab_sg:
                     # Las densidades del TOTAL se dejan vacías porque no se deben
                     # sumar ni promediar directamente.
 
-                    total_servicios_generales = sg_resumen_df["No. de servicios"].sum(skipna=True)
+                    total_servicios_generales = len(sg_resumen_df)
 
                     total_demanda_contratada = sg_resumen_df[
                         "Demanda Contratada (kW)"
@@ -16991,33 +14138,18 @@ with tab_sg:
                         "Consumo Anual (kWh)"
                     ].sum(skipna=True)
 
-                    total_abr = sg_resumen_df[
-                        "Área Bruta Rentable (m²)"
-                    ].sum(skipna=True)
-
-                    total_densidad_demanda_sg = (
-                        total_demanda_promedio_anual / total_abr * 1000
-                        if pd.notna(total_abr) and total_abr > 0
-                        else np.nan
-                    )
-
-                    total_densidad_consumo_sg = (
-                        total_consumo_anual / total_abr
-                        if pd.notna(total_abr) and total_abr > 0
-                        else np.nan
-                    )
-
                     total_row_sg = {
                         "Centro Comercial": "TOTAL",
+                        "Local de Servicios Generales": "",
+                        "No. servicio": "",
                         "Tipo de Centro Comercial": "",
                         "Clima": "",
-                        "No. de servicios": total_servicios_generales,
-                        "Área Bruta Rentable (m²)": total_abr,
+                        "No. de medidores de Servicios Generales": total_servicios_generales,
                         "Demanda Contratada (kW)": total_demanda_contratada,
                         "Demanda máxima anual (kW)": total_demanda_promedio_anual,
-                        "Densidad demanda (W/m² ABR)": total_densidad_demanda_sg,
+                        "Densidad demanda (W/m² ABR)": np.nan,
                         "Consumo Anual (kWh)": total_consumo_anual,
-                        "Densidad de Consumo Anual (kWh/m² ABR)": total_densidad_consumo_sg
+                        "Densidad de Consumo Anual (kWh/m² ABR)": np.nan
                     }
 
                     total_row_sg_df = pd.DataFrame([total_row_sg])
@@ -17042,10 +14174,11 @@ with tab_sg:
 
                     cols_sg_finales = [
                         "Centro Comercial",
+                        "Local de Servicios Generales",
+                        "No. servicio",
                         "Tipo de Centro Comercial",
                         "Clima",
-                        "No. de servicios",
-                        "Área Bruta Rentable (m²)",
+                        "No. de medidores de Servicios Generales",
                         "Demanda Contratada (kW)",
                         "Demanda máxima anual (kW)",
                         "Densidad demanda (W/m² ABR)",
@@ -17062,102 +14195,6 @@ with tab_sg:
                     ]
 
                     # ------------------------------------------------------------
-                    # Métricas de densidad SG por clima y tipo de centro comercial
-                    # ------------------------------------------------------------
-
-                    def construir_resumen_densidad_sg_por_grupo(df_sg, grupo_col):
-                        if df_sg.empty or grupo_col not in df_sg.columns:
-                            return pd.DataFrame()
-
-                        resumen = (
-                            df_sg[df_sg["Centro Comercial"].ne("TOTAL")]
-                            .copy()
-                            .groupby(grupo_col, dropna=False)
-                            .agg(
-                                Centros_comerciales=("Centro Comercial", "nunique"),
-                                Servicios_SG=("No. de servicios", "sum"),
-                                ABR_m2=("Área Bruta Rentable (m²)", "sum"),
-                                Demanda_maxima_SG_kw=("Demanda máxima anual (kW)", "sum")
-                            )
-                            .reset_index()
-                        )
-
-                        resumen["Densidad demanda SG (W/m² ABR)"] = np.where(
-                            resumen["ABR_m2"].gt(0),
-                            resumen["Demanda_maxima_SG_kw"] / resumen["ABR_m2"] * 1000,
-                            np.nan
-                        )
-
-                        resumen = resumen.rename(columns={
-                            grupo_col: grupo_col,
-                            "Centros_comerciales": "Centros comerciales",
-                            "Servicios_SG": "Total de servicios",
-                            "ABR_m2": "ABR total (m²)",
-                            "Demanda_maxima_SG_kw": "Demanda máxima SG (kW)"
-                        })
-
-                        for col_num in [
-                            "Total de servicios",
-                            "ABR total (m²)",
-                            "Demanda máxima SG (kW)",
-                            "Densidad demanda SG (W/m² ABR)"
-                        ]:
-                            if col_num in resumen.columns:
-                                dec = 0 if col_num in ["Total de servicios", "Demanda máxima SG (kW)"] else 1
-                                resumen[col_num] = pd.to_numeric(
-                                    resumen[col_num],
-                                    errors="coerce"
-                                ).round(dec)
-
-                        for col_fmt in ["Total de servicios", "Demanda máxima SG (kW)"]:
-                            if col_fmt in resumen.columns:
-                                resumen[col_fmt] = resumen[col_fmt].map(lambda x: f"{x:,.0f}" if pd.notna(x) else "")
-
-                        for col_fmt in ["ABR total (m²)", "Densidad demanda SG (W/m² ABR)"]:
-                            if col_fmt in resumen.columns:
-                                resumen[col_fmt] = resumen[col_fmt].map(lambda x: f"{x:,.1f}" if pd.notna(x) else "")
-
-                        return resumen
-
-                    st.markdown(
-                        '<div class="subsection-title">Por clima</div>',
-                        unsafe_allow_html=True
-                    )
-
-                    resumen_sg_clima = construir_resumen_densidad_sg_por_grupo(
-                        sg_resumen_display,
-                        "Clima"
-                    )
-
-                    if not resumen_sg_clima.empty:
-                        st.dataframe(
-                            resumen_sg_clima,
-                            use_container_width=True,
-                            hide_index=True
-                        )
-                    else:
-                        st.info("No se pudo construir el resumen SG por clima.")
-
-                    st.markdown(
-                        '<div class="subsection-title">Por tipo de centro comercial</div>',
-                        unsafe_allow_html=True
-                    )
-
-                    resumen_sg_tipo = construir_resumen_densidad_sg_por_grupo(
-                        sg_resumen_display,
-                        "Tipo de Centro Comercial"
-                    )
-
-                    if not resumen_sg_tipo.empty:
-                        st.dataframe(
-                            resumen_sg_tipo,
-                            use_container_width=True,
-                            hide_index=True
-                        )
-                    else:
-                        st.info("No se pudo construir el resumen SG por tipo de centro comercial.")
-
-                    # ------------------------------------------------------------
                     # Mostrar tabla sin scroll horizontal ni vertical
                     # ------------------------------------------------------------
                     # Usamos HTML en vez de st.dataframe para que la tabla se ajuste
@@ -17167,8 +14204,7 @@ with tab_sg:
 
                     # Formato visual de números
                     for col in [
-                        "No. de servicios",
-                        "Área Bruta Rentable (m²)",
+                        "No. de medidores de Servicios Generales",
                         "Demanda Contratada (kW)",
                         "Demanda máxima anual (kW)",
                         "Densidad demanda (W/m² ABR)",
@@ -17181,32 +14217,23 @@ with tab_sg:
                                 errors="coerce"
                             )
 
-                    if "No. de servicios" in sg_resumen_html.columns:
-                        sg_resumen_html["No. de servicios"] = (
-                            sg_resumen_html["No. de servicios"]
+                    if "No. de medidores de Servicios Generales" in sg_resumen_html.columns:
+                        sg_resumen_html["No. de medidores de Servicios Generales"] = (
+                            sg_resumen_html["No. de medidores de Servicios Generales"]
                             .map(lambda x: f"{x:,.0f}" if pd.notna(x) else "")
                         )
 
                     for col in [
                         "Demanda Contratada (kW)",
                         "Demanda máxima anual (kW)",
-                        "Consumo Anual (kWh)"
-                    ]:
-                        if col in sg_resumen_html.columns:
-                            sg_resumen_html[col] = (
-                                sg_resumen_html[col]
-                                .map(lambda x: f"{x:,.0f}" if pd.notna(x) else "")
-                            )
-
-                    for col in [
-                        "Área Bruta Rentable (m²)",
                         "Densidad demanda (W/m² ABR)",
+                        "Consumo Anual (kWh)",
                         "Densidad de Consumo Anual (kWh/m² ABR)"
                     ]:
                         if col in sg_resumen_html.columns:
                             sg_resumen_html[col] = (
                                 sg_resumen_html[col]
-                                .map(lambda x: f"{x:,.1f}" if pd.notna(x) else "")
+                                .map(lambda x: f"{x:,.2f}" if pd.notna(x) else "")
                             )
 
                     st.markdown(
@@ -17316,7 +14343,7 @@ with tab_sg:
                     st.caption(
                         "La Densidad demanda (W/m² ABR) se calcula como Demanda máxima anual (kW) "
                         "/ ABR × 1,000. "
-                        + NOTA_DEMANDA_MAXIMA_ANUAL
+                        + NOTA_DEMANDA_PROMEDIO_ANUAL
                     )
 
                 # ------------------------------------------------------------
@@ -17373,7 +14400,7 @@ with tab_sg:
                     if pd.notna(max_promedio_anual_sg) and max_promedio_anual_sg > 200:
                         st.caption(
                             f"Nota: existen centros comerciales con demanda máxima anual mayor a 200% de la contratada. "
-                            f"El valor máximo es {max_promedio_anual_sg:,.0f}%, por lo que la gráfica se recortó visualmente para mejorar la lectura."
+                            f"El valor máximo es {max_promedio_anual_sg:,.1f}%, por lo que la gráfica se recortó visualmente para mejorar la lectura."
                         )
 
                     plot_df["Máxima anual visual (%)"] = plot_df["Máxima anual (%)"].clip(
@@ -17382,6 +14409,7 @@ with tab_sg:
 
                     plot_df = plot_df.sort_values(
                         [
+                            "Tipo de Centro Comercial",
                             "Centro Comercial"
                         ]
                     ).reset_index(drop=True)
@@ -17408,13 +14436,16 @@ with tab_sg:
 
                 if plot_df.empty:
                     st.info(
-                        "No hay información suficiente para graficar Servicios Generales por centro comercial."
+                        "No hay información suficiente para graficar los locales de Servicios Generales."
                     )
 
                 else:
                     plot_df = plot_df.sort_values(
                         [
-                            "Centro Comercial"
+                            "Clima",
+                            "Tipo de Centro Comercial",
+                            "Centro Comercial",
+                            "Local de Servicios Generales"
                         ]
                     ).reset_index(drop=True)
 
@@ -17424,11 +14455,10 @@ with tab_sg:
                         .astype(str)
                         .str.strip()
                         + "\n"
-                        + "Servicios SG: "
-                        + plot_df["No. de servicios"]
-                        .fillna(0)
-                        .astype(int)
+                        + plot_df["Local de Servicios Generales"]
+                        .fillna("Sin nombre")
                         .astype(str)
+                        .str.strip()
                     )
 
                     # --------------------------------------------------------
@@ -17446,7 +14476,7 @@ with tab_sg:
 
                     if plot_df.empty:
                         st.info(
-                            "No hay centros comerciales con Servicios Generales y demanda "
+                            "No hay locales de Servicios Generales con demanda "
                             "contratada suficiente para calcular el porcentaje."
                         )
 
@@ -17485,7 +14515,7 @@ with tab_sg:
                                 f"Nota: existen locales de Servicios Generales con "
                                 f"demanda máxima anual mayor a 200% de la contratada. "
                                 f"El valor máximo es "
-                                f"{max_promedio_anual_sg:,.0f}%, por lo que la gráfica "
+                                f"{max_promedio_anual_sg:,.1f}%, por lo que la gráfica "
                                 f"se recortó visualmente para mejorar la lectura."
                             )
 
@@ -17552,223 +14582,12 @@ with tab_sg:
 
                         st.pyplot(fig)
 
-                        st.caption(NOTA_DEMANDA_MAXIMA_ANUAL)
-
-                    # ------------------------------------------------------------
-                    # Densidad de demanda de Servicios Generales
-                    # ------------------------------------------------------------
-
-                    st.markdown(
-                        '<div class="section-title">Densidad de demanda</div>',
-                        unsafe_allow_html=True
-                    )
-
-                    densidad_sg_plot = sg_resumen_display[
-                        sg_resumen_display["Centro Comercial"].ne("TOTAL")
-                    ].copy()
-
-                    densidad_sg_plot["Densidad demanda (W/m² ABR)"] = pd.to_numeric(
-                        densidad_sg_plot["Densidad demanda (W/m² ABR)"],
-                        errors="coerce"
-                    )
-
-                    densidad_sg_plot["Demanda máxima anual (kW)"] = pd.to_numeric(
-                        densidad_sg_plot["Demanda máxima anual (kW)"],
-                        errors="coerce"
-                    )
-
-                    densidad_sg_plot["Área Bruta Rentable (m²)"] = pd.to_numeric(
-                        densidad_sg_plot["Área Bruta Rentable (m²)"],
-                        errors="coerce"
-                    )
-
-                    densidad_sg_calculable = densidad_sg_plot[
-                        densidad_sg_plot["Densidad demanda (W/m² ABR)"].notna()
-                    ].copy()
-
-                    col_sg_den_1, col_sg_den_2, col_sg_den_3 = st.columns(3)
-
-                    col_sg_den_1.metric(
-                        "Locales ocupados con recibo del giro",
-                        f"{len(densidad_sg_plot):,}"
-                    )
-
-                    densidad_sg_agregada = calcular_densidad_agregada_w_m2(
-                        densidad_sg_plot,
-                        "Demanda máxima anual (kW)",
-                        "Área Bruta Rentable (m²)"
-                    )
-
-                    col_sg_den_2.metric(
-                        "Densidad de demanda del giro (W/m²)",
-                        format_number(densidad_sg_agregada, 1)
-                    )
-
-                    col_sg_den_3.metric(
-                        "Área total (m²)",
-                        format_number(
-                            densidad_sg_plot["Área Bruta Rentable (m²)"].sum(skipna=True),
-                            1
-                        )
-                    )
-
-                    if densidad_sg_plot.empty:
-                        st.info("No hay información de Servicios Generales para graficar densidad.")
-
-                    else:
-                        densidad_sg_plot = densidad_sg_plot.sort_values(
-                            [
-                                "Centro Comercial"
-                            ],
-                            na_position="last"
-                        ).reset_index(drop=True)
-
-                        densidad_sg_plot["x"] = range(len(densidad_sg_plot))
-
-                        promedio_sg_den = densidad_sg_calculable[
-                            "Densidad demanda (W/m² ABR)"
-                        ].mean()
-
-                        desv_sg_den = densidad_sg_calculable[
-                            "Densidad demanda (W/m² ABR)"
-                        ].std()
-
-                        if pd.isna(promedio_sg_den):
-                            promedio_sg_den = 0
-
-                        if pd.isna(desv_sg_den):
-                            desv_sg_den = 0
-
-                        fig_den_sg, ax_den_sg = plt.subplots(
-                            figsize=(min(max(14, len(densidad_sg_plot) * 0.65), 28), 6)
-                        )
-
-                        densidad_sg_con_valor = densidad_sg_plot[
-                            densidad_sg_plot["Densidad demanda (W/m² ABR)"].notna()
-                        ].copy()
-
-                        ax_den_sg.scatter(
-                            densidad_sg_con_valor["x"],
-                            densidad_sg_con_valor["Densidad demanda (W/m² ABR)"],
-                            label="Densidad de demanda SG"
-                        )
-
-                        densidad_sg_sin_valor = densidad_sg_plot[
-                            densidad_sg_plot["Densidad demanda (W/m² ABR)"].isna()
-                        ].copy()
-
-                        if not densidad_sg_sin_valor.empty:
-                            ax_den_sg.scatter(
-                                densidad_sg_sin_valor["x"],
-                                [0] * len(densidad_sg_sin_valor),
-                                marker="x",
-                                label="Sin densidad calculable"
-                            )
-
-                        if not densidad_sg_calculable.empty:
-                            ax_den_sg.axhline(
-                                densidad_sg_agregada,
-                                color="#C00000",
-                                linewidth=1.8,
-                                label="Densidad agregada"
-                            )
-
-                            ax_den_sg.axhline(
-                                promedio_sg_den + desv_sg_den,
-                                color="#009900",
-                                linewidth=1.5,
-                                label="+1 desv est"
-                            )
-
-                            ax_den_sg.axhline(
-                                max(promedio_sg_den - desv_sg_den, 0),
-                                color="#009900",
-                                linewidth=1.5,
-                                label="-1 desv est"
-                            )
-
-                        ax_den_sg.set_xticks(densidad_sg_plot["x"])
-                        ax_den_sg.set_xticklabels(
-                            densidad_sg_plot["Centro Comercial"],
-                            rotation=90,
-                            ha="center",
-                            fontsize=7
-                        )
-
-                        ax_den_sg.set_ylabel("Densidad de demanda SG (W/m² ABR)")
-                        ax_den_sg.set_xlabel("Centro Comercial")
-                        ax_den_sg.set_title("Densidad de demanda de Servicios Generales")
-                        ax_den_sg.grid(axis="y", alpha=0.25)
-
-                        handles, labels = ax_den_sg.get_legend_handles_labels()
-                        fig_den_sg.legend(
-                            handles,
-                            labels,
-                            loc="lower center",
-                            bbox_to_anchor=(0.5, 0.015),
-                            ncol=4,
-                            frameon=True
-                        )
-
-                        fig_den_sg.subplots_adjust(bottom=0.42)
-
-                        st.pyplot(fig_den_sg)
-
-                        tabla_den_sg = densidad_sg_plot[
-                            [
-                                "Centro Comercial",
-                                "Tipo de Centro Comercial",
-                                "Clima",
-                                "No. de servicios",
-                                "Área Bruta Rentable (m²)",
-                                "Demanda máxima anual (kW)",
-                                "Densidad demanda (W/m² ABR)"
-                            ]
-                        ].copy()
-
-                        for col_num in [
-                            "No. de servicios",
-                            "Área Bruta Rentable (m²)",
-                            "Demanda máxima anual (kW)",
-                            "Densidad demanda (W/m² ABR)"
-                        ]:
-                            dec = 0 if col_num in ["No. de servicios", "Demanda máxima anual (kW)"] else 1
-                            tabla_den_sg[col_num] = pd.to_numeric(
-                                tabla_den_sg[col_num],
-                                errors="coerce"
-                            ).round(dec)
-
-                        tabla_den_sg = tabla_den_sg.sort_values(
-                            "Centro Comercial",
-                            ascending=True,
-                            na_position="last"
-                        )
-
-                        for col_fmt in ["No. de servicios", "Demanda máxima anual (kW)"]:
-                            if col_fmt in tabla_den_sg.columns:
-                                tabla_den_sg[col_fmt] = pd.to_numeric(
-                                    tabla_den_sg[col_fmt],
-                                    errors="coerce"
-                                ).map(lambda x: f"{x:,.0f}" if pd.notna(x) else "")
-
-                        for col_fmt in ["Área Bruta Rentable (m²)", "Densidad demanda (W/m² ABR)"]:
-                            if col_fmt in tabla_den_sg.columns:
-                                tabla_den_sg[col_fmt] = pd.to_numeric(
-                                    tabla_den_sg[col_fmt],
-                                    errors="coerce"
-                                ).map(lambda x: f"{x:,.1f}" if pd.notna(x) else "")
-
-                        st.dataframe(
-                            tabla_den_sg,
-                            use_container_width=True,
-                            hide_index=True
-                        )
-
                         st.caption(
-                            "La densidad SG agregada se calcula como suma de Demanda máxima anual SG "
-                            "/ suma de ABR × 1,000. "
-                            + NOTA_DEMANDA_MAXIMA_ANUAL
-                        )
+                    "Nota: Demanda máxima anual (kW) = máxima demanda mensual registrada o estimada "
+                    "dentro de la ventana anual disponible. Para GDMTH, GDMTO y GDBT se toma el kwmax "
+                    "del parser; para PDBT se usa la demanda estimada con perfiles NREL cuando existe "
+                    "información suficiente."
+                )
 
 
 # ============================================================
@@ -17779,47 +14598,6 @@ with tab_calidad:
     st.markdown(
         '<div class="section-title">Diagnóstico de carga de datos</div>',
         unsafe_allow_html=True
-    )
-
-    st.markdown(
-        '<div class="subsection-title">Datos cargados</div>',
-        unsafe_allow_html=True
-    )
-
-    datos_cargados_df = pd.DataFrame({
-        "Archivo": [
-            "CSV de recibos parseados",
-            "CSV de histórico",
-            "Excel de datos generales",
-            "Rescate PDBT",
-            "Rescate GDM/GDBT",
-            "Filas nuevas / rescate full",
-            "Rescate Parks / Hospitality"
-        ],
-        "Ruta": [
-            str(parsed_path),
-            str(historico_path),
-            str(general_data_path),
-            str(PDBT_KWH_RESCUE_CSV),
-            str(GDM_RESCUE_CSV),
-            str(NEW_PARSER_ROWS_CSV),
-            str(PARKS_HOSPITALITY_RESCUE_CSV)
-        ],
-        "Existe": [
-            "Sí" if parsed_path.exists() else "No",
-            "Sí" if historico_path.exists() else "No",
-            "Sí" if general_data_path.exists() else "No",
-            "Sí" if PDBT_KWH_RESCUE_CSV.exists() else "No",
-            "Sí" if GDM_RESCUE_CSV.exists() else "No",
-            "Sí" if NEW_PARSER_ROWS_CSV.exists() else "No",
-            "Sí" if PARKS_HOSPITALITY_RESCUE_CSV.exists() else "No"
-        ]
-    })
-
-    st.dataframe(
-        datos_cargados_df,
-        use_container_width=True,
-        hide_index=True
     )
 
     filas_originales = len(parsed_raw) if "parsed_raw" in locals() else None
@@ -17846,7 +14624,7 @@ with tab_calidad:
                 filas_originales,
                 filas_preparadas,
                 filas_descartadas,
-                f"{conservacion_pct:.0f}%"
+                f"{conservacion_pct:.1f}%"
             ]
         })
 
@@ -17928,7 +14706,7 @@ with tab_calidad:
         st.metric("Universo total", f"{universo_cc}")
 
     with col3:
-        st.metric("Cobertura", f"{cobertura_pct:.0f}%")
+        st.metric("Cobertura", f"{cobertura_pct:.1f}%")
 
     representatividad_df = pd.DataFrame({
         "Indicador": [
@@ -17953,7 +14731,7 @@ with tab_calidad:
 
     st.info(
         "La muestra actual cubre 19 de 119 centros comerciales "
-        f"({cobertura_pct:.0f}% del universo). "
+        f"({cobertura_pct:.1f}% del universo). "
         "Bajo un supuesto de 95% de confianza, "
         "el margen de error estimado es de aproximadamente ±20%, "
         "por lo que los resultados deben interpretarse como una muestra exploratoria "
@@ -18058,518 +14836,928 @@ with tab_calidad:
         )
 
     # ------------------------------------------------------------
-    # Parser enriquecido sin match en Datos Generales
+    # Locales ocupados con recibo con información incompleta de demanda
     # ------------------------------------------------------------
 
     st.markdown(
-        '<div class="subsection-title">Estado de cruce del parser enriquecido vs Datos Generales</div>',
+        '<div class="subsection-title">Locales ocupados con recibo con información incompleta de demanda</div>',
         unsafe_allow_html=True
     )
 
-    if "parsed" in globals() and not parsed.empty:
+    if "benchmark_densidad_base" in globals() and not benchmark_densidad_base.empty:
 
-        parser_unmatched_global = parsed.copy()
-
-        # --------------------------------------------------------
-        # Llaves de match confirmadas desde la muestra global
-        # --------------------------------------------------------
-        matched_service_keys = set()
-        matched_file_keys = set()
-
-        def _iter_valores_match_debug(serie):
-            vals = []
-            if serie is None:
-                return vals
-            for value in serie.dropna().astype(str).tolist():
-                for part in str(value).replace("|", ",").split(","):
-                    s = part.strip()
-                    if s.upper() in ["", "NAN", "NONE", "<NA>"]:
-                        continue
-                    vals.append(s)
-            return vals
-
-        if "muestra_con_recibo_global" in globals() and not muestra_con_recibo_global.empty:
-            for col_serv in [
-                "no_servicio",
-                "parser_no_servicio_match",
-                "No. servicio diagnóstico"
-            ]:
-                if col_serv in muestra_con_recibo_global.columns:
-                    vals_serv = _iter_valores_match_debug(muestra_con_recibo_global[col_serv])
-                    if vals_serv:
-                        s_keys = _servicio_sin_ceros_key(pd.Series(vals_serv))
-                        matched_service_keys.update(
-                            s_keys.dropna().astype(str).str.strip().replace("", pd.NA).dropna().tolist()
-                        )
-
-            for col_path in [
-                "file_path",
-                "parser_file_path_match",
-                "parser_file_match",
-                "file_path diagnóstico",
-                "file_path base",
-                "source_file_path"
-            ]:
-                if col_path in muestra_con_recibo_global.columns:
-                    vals_path = _iter_valores_match_debug(muestra_con_recibo_global[col_path])
-                    if vals_path:
-                        p_keys = _normalizar_file_path_enriq(pd.Series(vals_path))
-                        matched_file_keys.update(
-                            p_keys.dropna().astype(str).str.strip().replace("", pd.NA).dropna().tolist()
-                        )
+        demanda_incompleta_base = benchmark_densidad_base.copy()
 
         # --------------------------------------------------------
-        # Preparar parser enriquecido
+        # Centro comercial
         # --------------------------------------------------------
-        if "file_path" not in parser_unmatched_global.columns:
-            parser_unmatched_global["file_path"] = ""
 
-        if "no_servicio" not in parser_unmatched_global.columns:
-            parser_unmatched_global["no_servicio"] = ""
+        if "_cc_key_reporte" in demanda_incompleta_base.columns:
+            demanda_incompleta_base["Centro Comercial"] = demanda_incompleta_base["_cc_key_reporte"]
 
-        parser_unmatched_global["_file_path_key_unmatched"] = _normalizar_file_path_enriq(
-            parser_unmatched_global["file_path"]
-        )
+        elif "_centro_comercial_limpio" in demanda_incompleta_base.columns:
+            demanda_incompleta_base["Centro Comercial"] = (
+                demanda_incompleta_base["_centro_comercial_limpio"].apply(cc_key)
+            )
 
-        parser_unmatched_global["_servicio_key_unmatched"] = _servicio_sin_ceros_key(
-            parser_unmatched_global["no_servicio"]
-        )
+        elif "NOMBRE DEL CC" in demanda_incompleta_base.columns:
+            demanda_incompleta_base["Centro Comercial"] = (
+                demanda_incompleta_base["NOMBRE DEL CC"].apply(cc_key)
+            )
 
-        cc_candidates_unmatched = []
-        if mall_col and mall_col in parser_unmatched_global.columns:
-            cc_candidates_unmatched.append(mall_col)
-        cc_candidates_unmatched += [
-            "mall_folder",
-            "mall",
-            "centro_comercial",
-            "Centro Comercial",
-            "source_sheet",
-            "file_path",
-            "source_file_path"
-        ]
-        parser_unmatched_global["_cc_key_unmatched"] = coalesce_cc_from_columns(
-            parser_unmatched_global,
-            cc_candidates_unmatched
-        )
-
-        parser_unmatched_global["Centro Comercial"] = parser_unmatched_global["_cc_key_unmatched"].apply(
-            cc_display_from_key
-        )
-
-        # Una fila del parser se considera con match si pertenece a un servicio
-        # ya confirmado por el match global o si su file_path ya fue copiado a DG.
-        parser_unmatched_global["_match_por_servicio_confirmado"] = (
-            parser_unmatched_global["_servicio_key_unmatched"]
-            .fillna("")
-            .astype(str)
-            .str.strip()
-            .isin(matched_service_keys)
-        )
-
-        parser_unmatched_global["_match_por_file_path_confirmado"] = (
-            parser_unmatched_global["_file_path_key_unmatched"]
-            .fillna("")
-            .astype(str)
-            .str.strip()
-            .isin(matched_file_keys)
-        )
-
-        # --------------------------------------------------------
-        # Match de revisión contra DG con la misma filosofía OR
-        # --------------------------------------------------------
-        # Esta tabla debe mostrar recibos del parser enriquecido que realmente
-        # NO aparecen en DG. Si el parser se puede asociar claramente a un
-        # local de DG por CC + medidor, CC + cliente, CC + nombre comercial,
-        # o porque el nombre/local aparece en el file_path/recibos_subgroup,
-        # no lo reportamos como "sin match".
-        parser_unmatched_global["_match_or_dg_debug"] = False
-
-        try:
-            dg_or_match = general_data.copy()
-            if not dg_or_match.empty:
-                dg_or_match["_cc_key_or_debug"] = coalesce_cc_from_columns(
-                    dg_or_match,
-                    [
-                        "NOMBRE DEL CC",
-                        "Centro Comercial",
-                        "CENTRO COMERCIAL",
-                        "source_sheet"
-                    ]
-                )
-
-                if "No. De medidor" in dg_or_match.columns:
-                    dg_or_match["_medidor_or_debug"] = normalize_meter_cc(dg_or_match["No. De medidor"])
-                elif "No. de medidor" in dg_or_match.columns:
-                    dg_or_match["_medidor_or_debug"] = normalize_meter_cc(dg_or_match["No. de medidor"])
-                else:
-                    dg_or_match["_medidor_or_debug"] = ""
-
-                if "CLIENTE" in dg_or_match.columns:
-                    dg_or_match["_cliente_or_debug"] = dg_or_match["CLIENTE"].apply(normalize_name_for_match)
-                else:
-                    dg_or_match["_cliente_or_debug"] = ""
-
-                if "NOMBRE COMERCIAL" in dg_or_match.columns:
-                    dg_or_match["_nombre_or_debug"] = dg_or_match["NOMBRE COMERCIAL"].apply(normalize_brand_name)
-                else:
-                    dg_or_match["_nombre_or_debug"] = ""
-
-                if "No de Local" in dg_or_match.columns:
-                    dg_or_match["_local_or_debug"] = dg_or_match["No de Local"].fillna("").astype(str)
-                else:
-                    dg_or_match["_local_or_debug"] = ""
-
-                # Solo locales ocupados para evitar que "Disponible" bloquee la revisión.
-                if "NOMBRE COMERCIAL" in dg_or_match.columns:
-                    _nombre_oc = dg_or_match["NOMBRE COMERCIAL"].fillna("").astype(str).str.strip()
-                    _cliente_oc = dg_or_match.get("CLIENTE", pd.Series("", index=dg_or_match.index)).fillna("").astype(str).str.strip()
-                    dg_or_match = dg_or_match[
-                        ~(
-                            _nombre_oc.eq("")
-                            | _nombre_oc.str.upper().eq("DISPONIBLE")
-                        )
-                        | _cliente_oc.ne("")
-                    ].copy()
-
-                dg_medidores_by_cc = set(
-                    zip(
-                        dg_or_match["_cc_key_or_debug"].fillna("").astype(str),
-                        dg_or_match["_medidor_or_debug"].fillna("").astype(str)
-                    )
-                )
-                dg_medidores_by_cc = {
-                    pair for pair in dg_medidores_by_cc
-                    if pair[0] and pair[1] and pair[1].upper() not in ["NAN", "NONE", "<NA>"]
-                }
-
-                dg_clientes_by_cc = set(
-                    zip(
-                        dg_or_match["_cc_key_or_debug"].fillna("").astype(str),
-                        dg_or_match["_cliente_or_debug"].fillna("").astype(str)
-                    )
-                )
-                dg_clientes_by_cc = {
-                    pair for pair in dg_clientes_by_cc
-                    if pair[0] and pair[1] and pair[1].upper() not in ["NAN", "NONE", "<NA>"]
-                }
-
-                dg_nombres_by_cc = set(
-                    zip(
-                        dg_or_match["_cc_key_or_debug"].fillna("").astype(str),
-                        dg_or_match["_nombre_or_debug"].fillna("").astype(str)
-                    )
-                )
-                dg_nombres_by_cc = {
-                    pair for pair in dg_nombres_by_cc
-                    if pair[0] and pair[1] and pair[1].upper() not in ["NAN", "NONE", "<NA>"]
-                }
-
-                if "medidor" in parser_unmatched_global.columns:
-                    _medidor_parser_or = normalize_meter_cc(parser_unmatched_global["medidor"])
-                else:
-                    _medidor_parser_or = pd.Series("", index=parser_unmatched_global.index)
-
-                if "cliente_nombre" in parser_unmatched_global.columns:
-                    _cliente_parser_or = parser_unmatched_global["cliente_nombre"].apply(normalize_name_for_match)
-                else:
-                    _cliente_parser_or = pd.Series("", index=parser_unmatched_global.index)
-
-                if "recibos_subgroup" in parser_unmatched_global.columns:
-                    _nombre_parser_or = parser_unmatched_global["recibos_subgroup"].apply(normalize_brand_name)
-                else:
-                    _nombre_parser_or = pd.Series("", index=parser_unmatched_global.index)
-
-                _cc_parser_or = parser_unmatched_global["_cc_key_unmatched"].fillna("").astype(str)
-
-                parser_unmatched_global["_match_or_dg_debug"] = [
-                    (
-                        (cc, med) in dg_medidores_by_cc
-                        or (cc, cli) in dg_clientes_by_cc
-                        or (cc, nom) in dg_nombres_by_cc
-                    )
-                    for cc, med, cli, nom in zip(
-                        _cc_parser_or,
-                        _medidor_parser_or.fillna("").astype(str),
-                        _cliente_parser_or.fillna("").astype(str),
-                        _nombre_parser_or.fillna("").astype(str)
-                    )
-                ]
-
-                # Fallback por texto: nombre comercial de DG contenido en file_path/subgrupo.
-                if not parser_unmatched_global["_match_or_dg_debug"].all():
-                    texto_cols_or = [
-                        col for col in ["file_path", "source_file_path", "recibos_subgroup", "file_name"]
-                        if col in parser_unmatched_global.columns
-                    ]
-
-                    if texto_cols_or and "_nombre_or_debug" in dg_or_match.columns:
-                        nombres_por_cc = (
-                            dg_or_match
-                            .groupby("_cc_key_or_debug")["_nombre_or_debug"]
-                            .apply(lambda s: sorted({v for v in s.dropna().astype(str) if v and v.upper() not in ["NAN", "NONE", "<NA>"]}))
-                            .to_dict()
-                        )
-
-                        textos_or = pd.Series("", index=parser_unmatched_global.index, dtype="object")
-                        for col_txt in texto_cols_or:
-                            textos_or = textos_or + " " + parser_unmatched_global[col_txt].fillna("").astype(str)
-                        textos_or = textos_or.apply(normalize_brand_name)
-
-                        mask_extra_or = []
-                        for cc, txt, ya in zip(_cc_parser_or, textos_or, parser_unmatched_global["_match_or_dg_debug"]):
-                            if ya:
-                                mask_extra_or.append(True)
-                                continue
-                            candidatos = nombres_por_cc.get(cc, [])
-                            mask_extra_or.append(any(has_partial_match_cc(nom, [txt]) for nom in candidatos if nom))
-                        parser_unmatched_global["_match_or_dg_debug"] = mask_extra_or
-
-        except Exception:
-            parser_unmatched_global["_match_or_dg_debug"] = False
-
-        # --------------------------------------------------------
-        # NO eliminamos aquí los matches OR.
-        #
-        # En v27 esta tabla ocultaba los casos que coincidían por OR contra DG
-        # (_match_or_dg_debug). Eso era útil para reducir ruido, pero no permitía
-        # distinguir si un recibo había hecho match confirmado o si solamente era
-        # "matchable" por diagnóstico.
-        #
-        # En v28 conservamos los tres estados:
-        #   1) MATCH CONFIRMADO EN MUESTRA: ya está dentro de muestra_con_recibo_global
-        #      por no_servicio o file_path confirmado.
-        #   2) POSIBLE MATCH DG POR OR: coincide contra DG por medidor/cliente/nombre/path,
-        #      pero no necesariamente quedó en la muestra global.
-        #   3) SIN MATCH DG: no se encontró relación clara con DG.
-        # --------------------------------------------------------
-        parser_unmatched_global["_estado_match_dg"] = np.select(
-            [
-                parser_unmatched_global["_match_por_servicio_confirmado"]
-                | parser_unmatched_global["_match_por_file_path_confirmado"],
-                parser_unmatched_global["_match_or_dg_debug"],
-            ],
-            [
-                "MATCH CONFIRMADO EN MUESTRA",
-                "POSIBLE MATCH DG POR OR - NO CONFIRMADO EN MUESTRA",
-            ],
-            default="SIN MATCH DG"
-        )
-
-        # Quitar filas sin ninguna llave útil para revisión.
-        parser_unmatched_global = parser_unmatched_global[
-            parser_unmatched_global["_servicio_key_unmatched"].fillna("").astype(str).str.strip().ne("")
-            | parser_unmatched_global["_file_path_key_unmatched"].fillna("").astype(str).str.strip().ne("")
-        ].copy()
-
-        if parser_unmatched_global.empty:
-            st.info(
-                "No hay filas del parser enriquecido con llaves suficientes para revisar contra Datos Generales."
+        elif "source_sheet" in demanda_incompleta_base.columns:
+            demanda_incompleta_base["Centro Comercial"] = (
+                demanda_incompleta_base["source_sheet"].apply(cc_key)
             )
 
         else:
-            # ----------------------------------------------------
-            # Columnas numéricas y textos de fuente
-            # ----------------------------------------------------
-            for col_num in [
-                "kwh_total",
-                "kwh_total_num",
-                "kwmax",
-                "kwmax_num",
-                "demanda_contratada_kw"
-            ]:
-                if col_num not in parser_unmatched_global.columns:
-                    parser_unmatched_global[col_num] = pd.NA
+            demanda_incompleta_base["Centro Comercial"] = ""
 
-            parser_unmatched_global["_kwh_total_diag"] = pd.to_numeric(
-                parser_unmatched_global["kwh_total_num"]
-                if "kwh_total_num" in parser_unmatched_global.columns
-                else parser_unmatched_global["kwh_total"],
-                errors="coerce"
-            )
+        # --------------------------------------------------------
+        # Nombre comercial
+        # --------------------------------------------------------
 
-            parser_unmatched_global["_kwmax_diag"] = pd.to_numeric(
-                parser_unmatched_global["kwmax_num"]
-                if "kwmax_num" in parser_unmatched_global.columns
-                else parser_unmatched_global["kwmax"],
-                errors="coerce"
-            )
+        if "Nombre Comercial" not in demanda_incompleta_base.columns:
 
-            parser_unmatched_global["_demanda_contratada_diag"] = pd.to_numeric(
-                parser_unmatched_global["demanda_contratada_kw"],
-                errors="coerce"
-            )
+            if "NOMBRE COMERCIAL" in demanda_incompleta_base.columns:
+                demanda_incompleta_base["Nombre Comercial"] = demanda_incompleta_base["NOMBRE COMERCIAL"]
 
-            if "tarifa_norm" in parser_unmatched_global.columns:
-                parser_unmatched_global["_tarifa_unmatched"] = parser_unmatched_global["tarifa_norm"]
-            elif "tarifa" in parser_unmatched_global.columns:
-                parser_unmatched_global["_tarifa_unmatched"] = parser_unmatched_global["tarifa"]
+            elif "CLIENTE" in demanda_incompleta_base.columns:
+                demanda_incompleta_base["Nombre Comercial"] = demanda_incompleta_base["CLIENTE"]
+
+            elif "cliente_nombre" in demanda_incompleta_base.columns:
+                demanda_incompleta_base["Nombre Comercial"] = demanda_incompleta_base["cliente_nombre"]
+
             else:
-                parser_unmatched_global["_tarifa_unmatched"] = ""
+                demanda_incompleta_base["Nombre Comercial"] = ""
 
-            parser_unmatched_global["_tarifa_unmatched"] = normalize_tarifa_series(
-                parser_unmatched_global["_tarifa_unmatched"]
-            ).fillna("SIN TARIFA")
+        # --------------------------------------------------------
+        # No. servicio
+        # --------------------------------------------------------
 
-            # Agrupar por no_servicio sin ceros cuando existe; si no, por file_path.
-            parser_unmatched_global["_grupo_unmatched"] = np.where(
-                parser_unmatched_global["_servicio_key_unmatched"].fillna("").astype(str).str.strip().ne(""),
-                "SERVICIO::" + parser_unmatched_global["_servicio_key_unmatched"].fillna("").astype(str),
-                "FILE::" + parser_unmatched_global["_file_path_key_unmatched"].fillna("").astype(str)
+        if "no_servicio" not in demanda_incompleta_base.columns:
+            demanda_incompleta_base["no_servicio"] = pd.NA
+
+        if "parser_no_servicio_match" in demanda_incompleta_base.columns:
+
+            servicio_faltante = (
+                demanda_incompleta_base["no_servicio"].isna()
+                | demanda_incompleta_base["no_servicio"]
+                .astype(str)
+                .str.upper()
+                .isin(["", "NAN", "NONE", "<NA>"])
             )
 
-            def _join_unicos_tabla(serie, max_items=4, upper=False):
-                vals = []
-                for v in serie.dropna().astype(str).tolist():
-                    for part in str(v).replace("|", ",").split(","):
-                        s = part.strip()
-                        if upper:
-                            s = s.upper()
-                        if s.upper() in ["", "NAN", "NONE", "<NA>"]:
-                            continue
-                        if re.match(r"^\d+\.0$", s):
-                            s = s.replace(".0", "")
-                        if s not in vals:
-                            vals.append(s)
-                if not vals:
-                    return pd.NA
-                if len(vals) > max_items:
-                    return " | ".join(vals[:max_items]) + f" | +{len(vals)-max_items} más"
-                return " | ".join(vals)
+            servicio_parser_valido = (
+                demanda_incompleta_base["parser_no_servicio_match"].notna()
+                & ~demanda_incompleta_base["parser_no_servicio_match"]
+                .astype(str)
+                .str.upper()
+                .isin(["", "NAN", "NONE", "<NA>"])
+            )
 
-            def _estado_match_prioritario(serie):
-                vals = set(serie.dropna().astype(str).tolist())
-                if "MATCH CONFIRMADO EN MUESTRA" in vals:
-                    return "MATCH CONFIRMADO EN MUESTRA"
-                if "POSIBLE MATCH DG POR OR - NO CONFIRMADO EN MUESTRA" in vals:
-                    return "POSIBLE MATCH DG POR OR - NO CONFIRMADO EN MUESTRA"
-                return "SIN MATCH DG"
+            demanda_incompleta_base.loc[
+                servicio_faltante & servicio_parser_valido,
+                "no_servicio"
+            ] = demanda_incompleta_base.loc[
+                servicio_faltante & servicio_parser_valido,
+                "parser_no_servicio_match"
+            ]
 
-            agg_unmatched = {
-                "Estado match DG": ("_estado_match_dg", _estado_match_prioritario),
-                "Centro Comercial": ("Centro Comercial", lambda x: _join_unicos_tabla(x, max_items=3)),
-                "Cliente parser": ("cliente_nombre", lambda x: _join_unicos_tabla(x, max_items=3)) if "cliente_nombre" in parser_unmatched_global.columns else ("_grupo_unmatched", lambda x: pd.NA),
-                "Subgrupo parser": ("recibos_subgroup", lambda x: _join_unicos_tabla(x, max_items=3)) if "recibos_subgroup" in parser_unmatched_global.columns else ("_grupo_unmatched", lambda x: pd.NA),
-                "no_servicio": ("no_servicio", lambda x: _preferir_no_servicio_12_digitos(x.tolist())),
-                "Medidor(es)": ("medidor", lambda x: _join_unicos_tabla(x, max_items=4, upper=True)) if "medidor" in parser_unmatched_global.columns else ("_grupo_unmatched", lambda x: pd.NA),
-                "Tarifa(s)": ("_tarifa_unmatched", lambda x: _join_unicos_tabla(x, max_items=4, upper=True)),
-                "Recibos / filas parser": ("_grupo_unmatched", "size"),
-                "File paths únicos": ("_file_path_key_unmatched", lambda x: x.replace("", pd.NA).dropna().nunique()),
-                "kWh_total máx": ("_kwh_total_diag", "max"),
-                "kwmax máx": ("_kwmax_diag", "max"),
-                "Demanda contratada máx": ("_demanda_contratada_diag", "max"),
-                "Fuente kWh": ("kwh_total_fuente", lambda x: _join_unicos_tabla(x, max_items=3)) if "kwh_total_fuente" in parser_unmatched_global.columns else ("_grupo_unmatched", lambda x: pd.NA),
-                "Fuente kwmax": ("kwmax_fuente", lambda x: _join_unicos_tabla(x, max_items=3)) if "kwmax_fuente" in parser_unmatched_global.columns else ("_grupo_unmatched", lambda x: pd.NA),
-                "Fuente demanda contratada": ("demanda_contratada_fuente", lambda x: _join_unicos_tabla(x, max_items=3)) if "demanda_contratada_fuente" in parser_unmatched_global.columns else ("_grupo_unmatched", lambda x: pd.NA),
-                "Fila agregada desde": ("fila_agregada_desde", lambda x: _join_unicos_tabla(x, max_items=3)) if "fila_agregada_desde" in parser_unmatched_global.columns else ("_grupo_unmatched", lambda x: pd.NA),
-                "Estatus enriquecimiento": ("parser_enriquecido_status", lambda x: _join_unicos_tabla(x, max_items=4)) if "parser_enriquecido_status" in parser_unmatched_global.columns else ("_grupo_unmatched", lambda x: pd.NA),
-                "file_path ejemplo": ("file_path", lambda x: _join_unicos_tabla(x, max_items=2))
+        # --------------------------------------------------------
+        # Tarifa
+        # --------------------------------------------------------
+
+        if "Tarifa" not in demanda_incompleta_base.columns:
+
+            if "TARIFA_FINAL" in demanda_incompleta_base.columns:
+                demanda_incompleta_base["Tarifa"] = demanda_incompleta_base["TARIFA_FINAL"]
+
+            elif "parser_tarifa_match" in demanda_incompleta_base.columns:
+                demanda_incompleta_base["Tarifa"] = demanda_incompleta_base["parser_tarifa_match"]
+
+            elif "tarifa_norm" in demanda_incompleta_base.columns:
+                demanda_incompleta_base["Tarifa"] = demanda_incompleta_base["tarifa_norm"]
+
+            else:
+                demanda_incompleta_base["Tarifa"] = "SIN TARIFA"
+
+        demanda_incompleta_base["Tarifa"] = normalize_tarifa_series(
+            demanda_incompleta_base["Tarifa"]
+        ).fillna("SIN TARIFA")
+
+        # --------------------------------------------------------
+        # Área
+        # --------------------------------------------------------
+
+        if "Area m2" not in demanda_incompleta_base.columns:
+            demanda_incompleta_base["Area m2"] = pd.NA
+
+        demanda_incompleta_base["Area m2"] = pd.to_numeric(
+            demanda_incompleta_base["Area m2"],
+            errors="coerce"
+        )
+
+        # --------------------------------------------------------
+        # Preparar parser para diagnóstico por recibo / file_path
+        # --------------------------------------------------------
+
+        parsed_demanda_diag = parsed.copy()
+
+        if mall_col and mall_col in parsed_demanda_diag.columns:
+            parsed_demanda_diag["Centro Comercial"] = (
+                parsed_demanda_diag[mall_col].apply(cc_key)
+            )
+        else:
+            parsed_demanda_diag["Centro Comercial"] = ""
+
+        parsed_demanda_diag["_key_no_servicio_debug"] = (
+            normalize_service_cc(parsed_demanda_diag["no_servicio"])
+            if "no_servicio" in parsed_demanda_diag.columns
+            else ""
+        )
+
+        parsed_demanda_diag["_key_no_servicio_debug_sin_ceros"] = (
+            parsed_demanda_diag["_key_no_servicio_debug"]
+            .fillna("")
+            .astype(str)
+            .str.lstrip("0")
+        )
+
+        if "file_path" not in parsed_demanda_diag.columns:
+            parsed_demanda_diag["file_path"] = ""
+
+        if "file_name" not in parsed_demanda_diag.columns:
+            parsed_demanda_diag["file_name"] = ""
+
+        parsed_demanda_diag["_kwh_total_num_diag"] = (
+            clean_number_series(parsed_demanda_diag["kwh_total"])
+            if "kwh_total" in parsed_demanda_diag.columns
+            else pd.NA
+        )
+
+        parsed_demanda_diag["_kwmax_num_diag"] = (
+            clean_number_series(parsed_demanda_diag["kwmax"])
+            if "kwmax" in parsed_demanda_diag.columns
+            else pd.NA
+        )
+
+        parsed_demanda_diag["_demanda_contratada_parser_num"] = (
+            clean_number_series(parsed_demanda_diag["demanda_contratada_kw"])
+            if "demanda_contratada_kw" in parsed_demanda_diag.columns
+            else pd.NA
+        )
+
+        parsed_demanda_diag["_demanda_real_fila_kw"] = (
+            pd.to_numeric(
+                parsed_demanda_diag["demanda_maxima_mensual_kw"],
+                errors="coerce"
+            )
+            if "demanda_maxima_mensual_kw" in parsed_demanda_diag.columns
+            else pd.NA
+        )
+
+        # --------------------------------------------------------
+        # Diagnóstico por servicio:
+        # detectar valores sospechosos repetidos en todas las filas
+        # --------------------------------------------------------
+        # Para PDBT revisamos kWh_total.
+        # Para GDMTH/GDMTO/GDBT revisamos kwmax.
+        #
+        # Si un mismo servicio tiene el mismo número en todos sus recibos,
+        # lo marcamos como sospechoso porque probablemente fue error de lectura.
+
+        parsed_demanda_diag["_n_recibos_servicio_diag"] = 0
+        parsed_demanda_diag["_kwmax_unicos_servicio_diag"] = pd.NA
+        parsed_demanda_diag["_kwmax_constante_servicio_diag"] = False
+        parsed_demanda_diag["_kwmax_constante_valor_diag"] = pd.NA
+        parsed_demanda_diag["_kwh_unicos_servicio_diag"] = pd.NA
+        parsed_demanda_diag["_kwh_constante_servicio_diag"] = False
+        parsed_demanda_diag["_kwh_constante_valor_diag"] = pd.NA
+
+        if (
+            "Centro Comercial" in parsed_demanda_diag.columns
+            and "_key_no_servicio_debug" in parsed_demanda_diag.columns
+        ):
+
+            group_cols_demanda_diag = [
+                "Centro Comercial",
+                "_key_no_servicio_debug"
+            ]
+
+            servicio_stats_diag = (
+                parsed_demanda_diag
+                .groupby(group_cols_demanda_diag, dropna=False)
+                .agg(
+                    _n_recibos_servicio_diag=(
+                        "file_path",
+                        "nunique"
+                    ),
+                    _kwmax_unicos_servicio_diag=(
+                        "_kwmax_num_diag",
+                        lambda x: x.dropna().nunique()
+                    ),
+                    _kwmax_constante_valor_diag=(
+                        "_kwmax_num_diag",
+                        lambda x: (
+                            x.dropna().iloc[0]
+                            if len(x.dropna()) > 0
+                            else pd.NA
+                        )
+                    ),
+                    _kwh_unicos_servicio_diag=(
+                        "_kwh_total_num_diag",
+                        lambda x: x.dropna().nunique()
+                    ),
+                    _kwh_constante_valor_diag=(
+                        "_kwh_total_num_diag",
+                        lambda x: (
+                            x.dropna().iloc[0]
+                            if len(x.dropna()) > 0
+                            else pd.NA
+                        )
+                    )
+                )
+                .reset_index()
+            )
+
+            servicio_stats_diag["_kwmax_constante_servicio_diag"] = (
+                servicio_stats_diag["_n_recibos_servicio_diag"].ge(3)
+                & servicio_stats_diag["_kwmax_unicos_servicio_diag"].eq(1)
+                & pd.to_numeric(
+                    servicio_stats_diag["_kwmax_constante_valor_diag"],
+                    errors="coerce"
+                ).notna()
+            )
+
+            servicio_stats_diag["_kwh_constante_servicio_diag"] = (
+                servicio_stats_diag["_n_recibos_servicio_diag"].ge(3)
+                & servicio_stats_diag["_kwh_unicos_servicio_diag"].eq(1)
+                & pd.to_numeric(
+                    servicio_stats_diag["_kwh_constante_valor_diag"],
+                    errors="coerce"
+                ).notna()
+            )
+
+            parsed_demanda_diag = parsed_demanda_diag.merge(
+                servicio_stats_diag,
+                on=group_cols_demanda_diag,
+                how="left",
+                suffixes=("", "_servicio")
+            )
+
+        if "tarifa_norm" in parsed_demanda_diag.columns:
+            parsed_demanda_diag["_tarifa_diag"] = normalize_tarifa_series(
+                parsed_demanda_diag["tarifa_norm"]
+            )
+        elif "tarifa" in parsed_demanda_diag.columns:
+            parsed_demanda_diag["_tarifa_diag"] = normalize_tarifa_series(
+                parsed_demanda_diag["tarifa"]
+            )
+        else:
+            parsed_demanda_diag["_tarifa_diag"] = pd.NA
+
+        # --------------------------------------------------------
+        # Función auxiliar para separar no_servicio cuando venga con |
+        # --------------------------------------------------------
+
+        def split_servicios_demanda_incompleta(value):
+            if pd.isna(value):
+                return []
+
+            servicios = []
+
+            for raw in str(value).split("|"):
+                raw = raw.strip()
+
+                if raw.upper() in ["", "NAN", "NONE", "<NA>"]:
+                    continue
+
+                servicio_key = normalize_service_cc(
+                    pd.Series([raw])
+                ).iloc[0]
+
+                if servicio_key:
+                    servicios.append(servicio_key)
+
+            return sorted(set(servicios))
+
+        # --------------------------------------------------------
+        # Construir tabla: una fila por recibo / file_path con problema
+        # --------------------------------------------------------
+
+        filas_demanda_incompleta = []
+
+        for _, row_local in demanda_incompleta_base.iterrows():
+
+            servicios_local = split_servicios_demanda_incompleta(
+                row_local.get("no_servicio", "")
+            )
+
+            if not servicios_local:
+                servicios_local = split_servicios_demanda_incompleta(
+                    row_local.get("parser_no_servicio_match", "")
+                )
+
+            servicios_local_sin_ceros = [
+                str(s).lstrip("0")
+                for s in servicios_local
+                if str(s).strip() != ""
+            ]
+
+            base_row = {
+                "Centro Comercial": row_local.get("Centro Comercial", ""),
+                "Nombre Comercial": row_local.get("Nombre Comercial", ""),
+                "no_servicio": row_local.get("no_servicio", ""),
+                "Tarifa": row_local.get("Tarifa", ""),
+                "Demanda contratada kW": pd.NA,
+                "Demanda base mensual kW": pd.NA,
+                "Area m2": row_local.get("Area m2", pd.NA),
+                "file_path": "",
+                "file_name": "",
+                "Motivo": ""
             }
 
-            parser_unmatched_display = (
-                parser_unmatched_global
-                .groupby("_grupo_unmatched", dropna=False)
-                .agg(**agg_unmatched)
+            if not servicios_local:
+                continue
+
+            mask_parser_local = (
+                parsed_demanda_diag["Centro Comercial"]
+                .astype(str)
+                .eq(str(row_local.get("Centro Comercial", "")))
+                & (
+                    parsed_demanda_diag["_key_no_servicio_debug"]
+                    .isin(servicios_local)
+                    |
+                    parsed_demanda_diag["_key_no_servicio_debug_sin_ceros"]
+                    .isin(servicios_local_sin_ceros)
+                )
+            )
+
+            parser_files_local = parsed_demanda_diag[
+                mask_parser_local
+            ].copy()
+
+            if parser_files_local.empty:
+                continue
+
+            parser_files_local = (
+                parser_files_local
+                .drop_duplicates(subset=["file_path"])
+                .sort_values("file_path")
+            )
+
+            for _, row_file in parser_files_local.iterrows():
+
+                tarifa_archivo = row_file.get(
+                    "_tarifa_diag",
+                    row_local.get("Tarifa", "")
+                )
+
+                tarifa_archivo = normalize_tarifa_value(tarifa_archivo)
+
+                demanda_real_fila_kw = row_file.get(
+                    "_demanda_real_fila_kw",
+                    pd.NA
+                )
+
+                demanda_contratada_parser = row_file.get(
+                    "_demanda_contratada_parser_num",
+                    pd.NA
+                )
+
+                kwh_total_fila = row_file.get(
+                    "_kwh_total_num_diag",
+                    pd.NA
+                )
+
+                kwmax_fila = row_file.get(
+                    "_kwmax_num_diag",
+                    pd.NA
+                )
+
+                motivos = []
+
+                # ------------------------------------------------
+                # 1) Falta demanda real del recibo
+                # ------------------------------------------------
+
+                demanda_real_incompleta = (
+                    pd.isna(demanda_real_fila_kw)
+                    or demanda_real_fila_kw <= 0
+                )
+
+                if demanda_real_incompleta:
+
+                    if str(tarifa_archivo).upper() == "PDBT":
+
+                        if pd.isna(kwh_total_fila) or kwh_total_fila <= 0:
+                            motivos.append(
+                                "Sin demanda base mensual: PDBT sin kWh_total válido en parser"
+                            )
+                        else:
+                            motivos.append(
+                                "Sin demanda base mensual: PDBT sin estimación NREL"
+                            )
+
+                    elif str(tarifa_archivo).upper() in ["GDMTH", "GDMTO", "GDBT"]:
+
+                        if pd.isna(kwmax_fila) or kwmax_fila <= 0:
+                            motivos.append(
+                                "Sin demanda base mensual: tarifa con demanda medida sin kwmax válido en parser"
+                            )
+                        else:
+                            motivos.append(
+                                "Sin demanda base mensual: no se calculó demanda mensual"
+                            )
+
+                    else:
+                        motivos.append(
+                            "Sin demanda base mensual: tarifa no identificada o sin dato de demanda"
+                        )
+
+                # ------------------------------------------------
+                # 1B) Valor sospechoso repetido en todas las filas
+                # ------------------------------------------------
+                # Esto detecta errores de lectura como:
+                # - kwmax = 1 en todos los recibos GDMTO/GDMTH/GDBT
+                # - kWh_total idéntico en todos los recibos PDBT
+
+                n_recibos_servicio = row_file.get(
+                    "_n_recibos_servicio_diag",
+                    pd.NA
+                )
+
+                kwmax_constante_servicio = bool(
+                    row_file.get(
+                        "_kwmax_constante_servicio_diag",
+                        False
+                    )
+                )
+
+                kwmax_constante_valor = row_file.get(
+                    "_kwmax_constante_valor_diag",
+                    pd.NA
+                )
+
+                kwh_constante_servicio = bool(
+                    row_file.get(
+                        "_kwh_constante_servicio_diag",
+                        False
+                    )
+                )
+
+                kwh_constante_valor = row_file.get(
+                    "_kwh_constante_valor_diag",
+                    pd.NA
+                )
+
+                if (
+                    str(tarifa_archivo).upper() == "PDBT"
+                    and kwh_constante_servicio
+                    and pd.notna(kwh_constante_valor)
+                    and n_recibos_servicio >= 3
+                ):
+                    motivos.append(
+                        f"Valor sospechoso: PDBT con kWh_total repetido en todos los recibos del servicio ({kwh_constante_valor})"
+                    )
+
+                if (
+                    str(tarifa_archivo).upper() in ["GDMTH", "GDMTO", "GDBT"]
+                    and kwmax_constante_servicio
+                    and pd.notna(kwmax_constante_valor)
+                    and n_recibos_servicio >= 3
+                ):
+                    motivos.append(
+                        f"Valor sospechoso: tarifa con demanda medida con kwmax repetido en todos los recibos del servicio ({kwmax_constante_valor})"
+                    )
+
+                # ------------------------------------------------
+                # 2) Falta demanda contratada en parser
+                # ------------------------------------------------
+                # Excepción: PDBT sin demanda contratada usa default 25 kW.
+
+                if str(tarifa_archivo).upper() == "PDBT":
+
+                    demanda_contratada_mostrar = (
+                        demanda_contratada_parser
+                        if pd.notna(demanda_contratada_parser)
+                        else 25
+                    )
+
+                else:
+
+                    demanda_contratada_mostrar = demanda_contratada_parser
+
+                    if pd.isna(demanda_contratada_parser) or demanda_contratada_parser <= 0:
+                        motivos.append(
+                            "Sin demanda contratada registrada en parser"
+                        )
+
+                # Si el recibo no tiene problema, no entra a la tabla.
+                if not motivos:
+                    continue
+
+                fila = base_row.copy()
+
+                fila["Tarifa"] = tarifa_archivo
+                fila["Demanda contratada kW"] = demanda_contratada_mostrar
+                fila["Demanda base mensual kW"] = demanda_real_fila_kw
+                fila["file_path"] = row_file.get("file_path", "")
+                fila["file_name"] = row_file.get("file_name", "")
+                fila["Motivo"] = " | ".join(motivos)
+
+                filas_demanda_incompleta.append(fila)
+
+        demanda_incompleta_display = pd.DataFrame(filas_demanda_incompleta)
+
+        if not demanda_incompleta_display.empty:
+
+            demanda_incompleta_display = (
+                demanda_incompleta_display
+                .sort_values(
+                    [
+                        "Centro Comercial",
+                        "Nombre Comercial",
+                        "file_path"
+                    ],
+                    na_position="last"
+                )
                 .reset_index(drop=True)
             )
 
-            # Limpiar ceros/NaN visuales.
             for col_num in [
-                "kWh_total máx",
-                "kwmax máx",
-                "Demanda contratada máx"
+                "Demanda contratada kW",
+                "Demanda base mensual kW",
+                "Area m2"
             ]:
-                parser_unmatched_display[col_num] = pd.to_numeric(
-                    parser_unmatched_display[col_num],
-                    errors="coerce"
+                if col_num in demanda_incompleta_display.columns:
+                    demanda_incompleta_display[col_num] = pd.to_numeric(
+                        demanda_incompleta_display[col_num],
+                        errors="coerce"
+                    ).round(2)
+
+            # --------------------------------------------------------
+            # Conteo de locales únicos con información incompleta
+            # --------------------------------------------------------
+
+            local_key_cols_demanda = [
+                "Centro Comercial",
+                "Nombre Comercial",
+                "no_servicio"
+            ]
+
+            locales_incompletos_unicos = (
+                demanda_incompleta_display[
+                    local_key_cols_demanda
+                ]
+                .drop_duplicates()
+                .shape[0]
+            )
+
+            archivos_incompletos_unicos = (
+                demanda_incompleta_display["file_path"]
+                .replace("", pd.NA)
+                .dropna()
+                .nunique()
+                if "file_path" in demanda_incompleta_display.columns
+                else 0
+            )
+
+            # --------------------------------------------------------
+            # Desglose por tipo de problema
+            # --------------------------------------------------------
+            # La tabla tiene una fila por file_path.
+            # Para el warning agrupamos por local único y juntamos todos
+            # los motivos encontrados en sus recibos.
+
+            motivos_por_local = (
+                demanda_incompleta_display
+                .groupby(
+                    local_key_cols_demanda,
+                    dropna=False
+                )["Motivo"]
+                .apply(
+                    lambda s: " | ".join(
+                        sorted(
+                            set(
+                                s.dropna()
+                                .astype(str)
+                                .str.strip()
+                            )
+                        )
+                    )
                 )
+                .reset_index()
+            )
 
-            parser_unmatched_display = parser_unmatched_display.sort_values(
-                ["Centro Comercial", "Cliente parser", "Subgrupo parser", "no_servicio"],
-                na_position="last"
-            ).reset_index(drop=True)
-
-            servicios_sin_match = int(
-                parser_unmatched_display["no_servicio"]
+            motivos_upper = (
+                motivos_por_local["Motivo"]
                 .fillna("")
                 .astype(str)
-                .str.strip()
-                .replace("", pd.NA)
-                .dropna()
-                .nunique()
-            )
-            filas_parser_sin_match = len(parser_unmatched_global)
-            archivos_parser_sin_match = int(
-                parser_unmatched_global["_file_path_key_unmatched"]
-                .replace("", pd.NA)
-                .dropna()
-                .nunique()
+                .str.upper()
             )
 
-            conteo_estados_match = (
-                parser_unmatched_display["Estado match DG"]
-                .fillna("SIN MATCH DG")
-                .value_counts()
-                .to_dict()
+            # Sin kWh_total o kwmax válido:
+            # - PDBT sin kWh_total válido
+            # - GDMTH/GDMTO/GDBT sin kwmax válido
+            mask_sin_kwh_o_kwmax = (
+                motivos_upper.str.contains(
+                    "PDBT SIN KWH_TOTAL",
+                    na=False
+                )
+                |
+                motivos_upper.str.contains(
+                    "SIN KWMAX",
+                    na=False
+                )
             )
 
-            st.info(
-                "Esta tabla ya NO oculta los matches por OR. "
-                "Muestra si cada servicio del parser enriquecido está confirmado en la muestra, "
-                "si solo es un posible match por OR, o si realmente queda sin match contra DG."
+            # Sin demanda contratada en parser
+            mask_sin_demanda_contratada = (
+                motivos_upper.str.contains(
+                    "SIN DEMANDA CONTRATADA",
+                    na=False
+                )
             )
 
-            st.write(
-                "Servicios por estado: "
-                + "; ".join([f"{k}: {v:,}" for k, v in conteo_estados_match.items()])
+            # Tiene ambas condiciones
+            mask_sin_ambas = (
+                mask_sin_kwh_o_kwmax
+                & mask_sin_demanda_contratada
             )
 
-            estados_disponibles_parser = ["Todos"] + sorted(
-                parser_unmatched_display["Estado match DG"]
-                .fillna("SIN MATCH DG")
-                .astype(str)
-                .unique()
-                .tolist()
+            # Valor sospechoso repetido en todas las filas
+            # Esto no necesariamente es "vacío", pero sí requiere reparseo.
+            mask_valor_sospechoso = (
+                motivos_upper.str.contains(
+                    "VALOR SOSPECHOSO",
+                    na=False
+                )
             )
 
-            estado_parser_sel = st.selectbox(
-                "Filtrar estado de cruce parser vs DG",
-                options=estados_disponibles_parser,
-                index=0,
-                key="estado_cruce_parser_dg_v28"
+            locales_sin_kwh_o_kwmax = int(
+                mask_sin_kwh_o_kwmax.sum()
             )
 
-            parser_unmatched_display_view = parser_unmatched_display.copy()
-            if estado_parser_sel != "Todos":
-                parser_unmatched_display_view = parser_unmatched_display_view[
-                    parser_unmatched_display_view["Estado match DG"].astype(str).eq(estado_parser_sel)
-                ].copy()
+            locales_sin_demanda_contratada = int(
+                mask_sin_demanda_contratada.sum()
+            )
+
+            locales_sin_ambas = int(
+                mask_sin_ambas.sum()
+            )
+
+            locales_valor_sospechoso = int(
+                mask_valor_sospechoso.sum()
+            )
+
+            st.warning(
+                f"{locales_incompletos_unicos} locales ocupados con recibo tienen información incompleta o sospechosa de demanda. "
+                f"De esos, {locales_sin_kwh_o_kwmax} no tienen kWh_total o kwmax válido según su tarifa; "
+                f"{locales_sin_demanda_contratada} no tienen demanda contratada en parser; "
+                f"y {locales_sin_ambas} tienen ambas condiciones. "
+                f"Además, {locales_valor_sospechoso} locales tienen valores sospechosos repetidos en todos sus recibos. "
+                f"La tabla muestra {len(demanda_incompleta_display)} filas, una por cada file_path real del parser con información incompleta o sospechosa. "
+                f"Archivos únicos encontrados: {archivos_incompletos_unicos}."
+            )
 
             st.dataframe(
-                parser_unmatched_display_view,
+                demanda_incompleta_display,
                 use_container_width=True,
+                height=600,
                 hide_index=True,
-                height=650,
                 column_config={
-                    "file_path ejemplo": st.column_config.TextColumn(
-                        "file_path ejemplo",
+                    "file_path": st.column_config.TextColumn(
+                        "file_path",
                         width="large"
                     ),
-                    "Estatus enriquecimiento": st.column_config.TextColumn(
-                        "Estatus enriquecimiento",
-                        width="large"
+                    "file_name": st.column_config.TextColumn(
+                        "file_name",
+                        width="medium"
                     )
                 }
             )
 
-            st.caption(
-                "MATCH CONFIRMADO EN MUESTRA = el servicio/file_path sí quedó dentro de la muestra global con recibo. "
-                "POSIBLE MATCH DG POR OR = hay coincidencia con DG por medidor/cliente/nombre/local/path, "
-                "pero no necesariamente quedó confirmado dentro de muestra_con_recibo_global. "
-                "SIN MATCH DG = no se encontró relación clara con Datos Generales."
+            # --------------------------------------------------------
+            # Tabla adicional:
+            # locales NO PDBT sin kWh_total válido en ningún recibo
+            # --------------------------------------------------------
+            # Esta tabla parte de la tabla superior de información incompleta.
+            # Agrupa por local/servicio y muestra solo locales con tarifa
+            # distinta de PDBT donde ningún recibo/fila del parser tiene
+            # kWh_total válido.
+
+            st.markdown(
+                '<div class="subsection-title">Locales no PDBT sin kWh_total en ningún recibo</div>',
+                unsafe_allow_html=True
             )
 
+            locales_sin_kwh_no_pdbt_rows = []
+
+            locales_revision_kwh = (
+                demanda_incompleta_display[
+                    [
+                        "Centro Comercial",
+                        "Nombre Comercial",
+                        "no_servicio",
+                        "Tarifa",
+                        "Demanda contratada kW",
+                        "Area m2"
+                    ]
+                ]
+                .drop_duplicates()
+                .reset_index(drop=True)
+            )
+
+            for _, row_local in locales_revision_kwh.iterrows():
+
+                servicios_local = split_servicios_demanda_incompleta(
+                    row_local.get("no_servicio", "")
+                )
+
+                servicios_local_sin_ceros = [
+                    str(s).lstrip("0")
+                    for s in servicios_local
+                    if str(s).strip() != ""
+                ]
+
+                if not servicios_local:
+                    continue
+
+                mask_parser_local = (
+                    parsed_demanda_diag["Centro Comercial"]
+                    .astype(str)
+                    .eq(str(row_local.get("Centro Comercial", "")))
+                    & (
+                        parsed_demanda_diag["_key_no_servicio_debug"]
+                        .isin(servicios_local)
+                        |
+                        parsed_demanda_diag["_key_no_servicio_debug_sin_ceros"]
+                        .isin(servicios_local_sin_ceros)
+                    )
+                )
+
+                parser_local = parsed_demanda_diag[
+                    mask_parser_local
+                ].copy()
+
+                if parser_local.empty:
+                    continue
+
+                parser_local = parser_local.drop_duplicates(
+                    subset=["file_path"]
+                )
+
+                # Tarifa detectada en las filas reales del parser.
+                if "_tarifa_diag" in parser_local.columns:
+                    parser_local["_tarifa_local_norm"] = normalize_tarifa_series(
+                        parser_local["_tarifa_diag"]
+                    )
+                else:
+                    parser_local["_tarifa_local_norm"] = normalize_tarifa_value(
+                        row_local.get("Tarifa", "")
+                    )
+
+                tarifas_local = (
+                    parser_local["_tarifa_local_norm"]
+                    .dropna()
+                    .astype(str)
+                    .str.upper()
+                    .str.strip()
+                    .replace("", pd.NA)
+                    .dropna()
+                    .unique()
+                    .tolist()
+                )
+
+                # Excluir locales que sean únicamente PDBT.
+                tarifas_no_pdbt = [
+                    t for t in tarifas_local
+                    if t != "PDBT"
+                ]
+
+                if not tarifas_no_pdbt:
+                    continue
+
+                parser_local["_kwh_total_valido"] = (
+                    pd.to_numeric(
+                        parser_local["_kwh_total_num_diag"],
+                        errors="coerce"
+                    )
+                    .gt(0)
+                )
+
+                recibos_parser = len(parser_local)
+
+                recibos_con_kwh = int(
+                    parser_local["_kwh_total_valido"].sum()
+                )
+
+                recibos_sin_kwh = int(
+                    recibos_parser - recibos_con_kwh
+                )
+
+                # Condición clave:
+                # solo mostrar si ningún recibo tiene kWh_total válido.
+                if recibos_con_kwh > 0:
+                    continue
+
+                file_paths_local = (
+                    parser_local["file_path"]
+                    .replace("", pd.NA)
+                    .dropna()
+                    .astype(str)
+                    .unique()
+                    .tolist()
+                    if "file_path" in parser_local.columns
+                    else []
+                )
+
+                locales_sin_kwh_no_pdbt_rows.append({
+                    "Centro Comercial": row_local.get("Centro Comercial", ""),
+                    "Nombre Comercial": row_local.get("Nombre Comercial", ""),
+                    "no_servicio": row_local.get("no_servicio", ""),
+                    "Tarifa": (
+                        " | ".join(sorted(set(tarifas_no_pdbt)))
+                        if tarifas_no_pdbt
+                        else row_local.get("Tarifa", "")
+                    ),
+                    "Recibos / filas parser": recibos_parser,
+                    "Recibos con kWh_total válido": recibos_con_kwh,
+                    "Recibos sin kWh_total válido": recibos_sin_kwh,
+                    "Demanda contratada kW": row_local.get(
+                        "Demanda contratada kW",
+                        pd.NA
+                    ),
+                    "Area m2": row_local.get("Area m2", pd.NA),
+                    "File paths únicos": len(file_paths_local),
+                    "file_path ejemplo": (
+                        file_paths_local[0]
+                        if file_paths_local
+                        else ""
+                    )
+                })
+
+            locales_sin_kwh_no_pdbt_df = pd.DataFrame(
+                locales_sin_kwh_no_pdbt_rows
+            )
+
+            if locales_sin_kwh_no_pdbt_df.empty:
+                st.success(
+                    "No hay locales no PDBT donde todos sus recibos estén sin kWh_total válido."
+                )
+
+            else:
+                locales_sin_kwh_no_pdbt_df = (
+                    locales_sin_kwh_no_pdbt_df
+                    .sort_values(
+                        [
+                            "Centro Comercial",
+                            "Nombre Comercial",
+                            "no_servicio"
+                        ],
+                        na_position="last"
+                    )
+                    .reset_index(drop=True)
+                )
+
+                for col_num in [
+                    "Recibos / filas parser",
+                    "Recibos con kWh_total válido",
+                    "Recibos sin kWh_total válido",
+                    "Demanda contratada kW",
+                    "Area m2",
+                    "File paths únicos"
+                ]:
+                    if col_num in locales_sin_kwh_no_pdbt_df.columns:
+                        locales_sin_kwh_no_pdbt_df[col_num] = pd.to_numeric(
+                            locales_sin_kwh_no_pdbt_df[col_num],
+                            errors="coerce"
+                        )
+
+                st.warning(
+                    f"{len(locales_sin_kwh_no_pdbt_df):,} locales ocupados con recibo "
+                    "con tarifa distinta de PDBT no tienen kWh_total válido en ninguno de sus recibos."
+                )
+
+                st.dataframe(
+                    locales_sin_kwh_no_pdbt_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=500,
+                    column_config={
+                        "file_path ejemplo": st.column_config.TextColumn(
+                            "file_path ejemplo",
+                            width="large"
+                        )
+                    }
+                )
+
     else:
-        st.info("No está disponible el parser enriquecido para construir esta revisión.")
+        st.info(
+            "No está disponible benchmark_densidad_base para diagnosticar demanda incompleta."
+        )
 
     # ------------------------------------------------------------
     # Tabla provisional: locales ocupados con recibo confirmado
@@ -19355,7 +16543,12 @@ with tab_anexo:
     })
 
     st.dataframe(metodologia_df, use_container_width=True)
-    st.caption(NOTA_DEMANDA_MAXIMA_ANUAL)
+    st.caption(
+                    "Nota: Demanda máxima anual (kW) = máxima demanda mensual registrada o estimada "
+                    "dentro de la ventana anual disponible. Para GDMTH, GDMTO y GDBT se toma el kwmax "
+                    "del parser; para PDBT se usa la demanda estimada con perfiles NREL cuando existe "
+                    "información suficiente."
+                )
 
     st.markdown(
         '<div class="subsection-title">Calibración híbrida PDBT: NREL + factor Allux</div>',
